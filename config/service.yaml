@@ -1,0 +1,28 @@
+# opal-talk-svc process configuration (loaded from $OPAL_TALK_CONFIG or ./config/service.yaml).
+# Relative paths are resolved against the working directory. Env overrides:
+#   OPAL_TALK_HOST, OPAL_TALK_PORT, OPAL_TALK_DATA_DIR, OPAL_TALK_CONFIG_DIR, OPAL_TALK_SPA_DIR
+service:
+  host: 127.0.0.1
+  port: 8001
+  log_level: info
+  data_dir: ./var            # SQLite state (opal_talk.db) and backups/
+  config_dir: ./config       # YAML read by POST /api/v1/backup/import and on first start
+  spa_dir: ./spa/dist        # optional: serve the built SPA at /ui
+  cors_origins:
+    - http://localhost:5173
+    - http://127.0.0.1:5173
+
+  # Initial engine state, applied only when an engine is first seen (later changes are made
+  # through PATCH /api/v1/engines/{engine_id} and persisted).
+  engines:
+    piper:
+      enabled: true
+      options:
+        voices_dir: ~/piper/voices
+        use_cuda: false
+    kokoro:
+      enabled: true
+      options:
+        model_path: ~/kokoro/kokoro-v1.0.int8.onnx
+        voices_path: ~/kokoro/voices-v1.0.bin
+        default_lang: en-us

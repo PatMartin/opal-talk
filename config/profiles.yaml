@@ -1,0 +1,27 @@
+version: 1
+profiles:
+  - name: default
+    description: General-purpose local speech
+    is_active: true
+    voice_id: en-us-amy-low
+    speed: 1.0
+    volume: 1.0
+    output_format: wav
+    sample_rate: null
+    engine_options: {}
+  - name: kokoro
+    description: Kokoro neural voice, slightly faster
+    is_active: false
+    voice_id: kokoro-af-heart
+    speed: 1.1
+    volume: 1.0
+    output_format: wav
+    engine_options: {}
+  - name: telephony
+    description: 8 kHz PCM for telephony pipelines
+    is_active: false
+    voice_id: en-us-amy-low
+    output_format: pcm
+    sample_rate: 8000
+    engine_options:
+      noise_scale: 0.5

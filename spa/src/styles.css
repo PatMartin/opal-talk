@@ -1,0 +1,156 @@
+:root {
+  font-family: system-ui, sans-serif;
+  color: #1d2330;
+  background: #f6f7f9;
+  --accent: #3b5bdb;
+}
+body {
+  margin: 0;
+}
+.app {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 1rem 1.5rem 3rem;
+}
+header {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+}
+h1 {
+  margin: 0.5rem 0;
+  font-size: 1.5rem;
+}
+nav {
+  display: flex;
+  gap: 0.25rem;
+  border-bottom: 1px solid #d0d5dd;
+  margin-bottom: 1rem;
+}
+nav button {
+  border: none;
+  background: none;
+  padding: 0.5rem 0.9rem;
+  border-bottom: 2px solid transparent;
+}
+nav button.active {
+  border-bottom-color: var(--accent);
+  color: var(--accent);
+}
+button {
+  cursor: pointer;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid #c4cad4;
+  border-radius: 4px;
+  background: white;
+}
+button[type='submit'] {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: white;
+  margin: 0.5rem 0 1rem;
+}
+th,
+td {
+  text-align: left;
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid #eceff3;
+  font-size: 0.9rem;
+}
+.actions {
+  white-space: nowrap;
+}
+.actions > * {
+  margin-right: 0.25rem;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.75rem;
+}
+.grid .wide {
+  grid-column: 1 / -1;
+}
+.row {
+  display: flex;
+  gap: 0.75rem;
+  align-items: end;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+}
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.85rem;
+}
+label.check {
+  flex-direction: row;
+  align-items: center;
+}
+input,
+select,
+textarea {
+  font: inherit;
+  padding: 0.3rem;
+  border: 1px solid #c4cad4;
+  border-radius: 4px;
+}
+.mono,
+pre {
+  font-family: ui-monospace, monospace;
+  font-size: 0.8rem;
+}
+pre {
+  background: white;
+  padding: 0.75rem;
+  overflow: auto;
+}
+.muted {
+  color: #667085;
+  font-size: 0.85rem;
+}
+.error {
+  color: #b42318;
+  background: #fef3f2;
+  padding: 0.5rem;
+  border-radius: 4px;
+  margin: 0.5rem 0;
+}
+.ok {
+  color: #067647;
+}
+.pill {
+  font-size: 0.75rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+}
+.pill.ok {
+  background: #dcfae6;
+}
+.pill.error {
+  margin: 0;
+  padding: 0.1rem 0.5rem;
+}
+.status-ok {
+  color: #067647;
+}
+.status-degraded {
+  color: #b54708;
+}
+.status-error {
+  color: #b42318;
+}
+.audio {
+  margin: 1rem 0;
+}
+.card {
+  background: white;
+  padding: 1rem;
+  border-radius: 6px;
+}

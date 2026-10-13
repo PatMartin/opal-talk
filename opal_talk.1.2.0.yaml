@@ -1,0 +1,2962 @@
+openapi: 3.1.0
+info:
+  title: OPAL Talk API
+  version: 1.2.0
+  description: "Implementation-neutral text-to-speech (TTS) service for the OPAL suite.\n\nOPAL Talk provides\
+    \ a stable REST contract over one or more host-installed TTS\nengines such as Piper or Kokoro. Clients\
+    \ interact with OPAL concepts—engines,\nvoices, profiles, generation settings, and audio output—without\
+    \ depending on a\nspecific engine's command line, model layout, Python API, or native output format.\n\n\
+    Design principles:\n\n* The OpenAPI contract is the public source of truth for service behavior.\n* Engines\
+    \ are installed and discovered by the implementation; they are not created\n  or deleted through this API.\n\
+    * Voices are registrations that point at voice/model resources already available\n  on the host. The API\
+    \ never uploads or deletes model files.\n* A voice has a globally unique OPAL `voice_id` and normally determines\
+    \ which\n  engine is used.\n* Requests may optionally specify an `engine_id` override for testing or advanced\n\
+    \  routing. The selected engine must be compatible with the registered voice.\n* The portable controls\
+    \ are voice, speed, volume, output format, and optionally\n  sample rate. Engine-specific features are\
+    \ carried in an opaque `engine_options`\n  object.\n* Supported completed-audio formats are WAV and raw\
+    \ PCM.\n* Raw PCM is always signed 16-bit little-endian (`s16le`), mono. Its sample rate\n  is returned\
+    \ in the `X-Opal-Sample-Rate` response header.\n* Streaming generation is synchronous from the caller's\
+    \ perspective and returns a\n  progressive raw PCM byte stream. Streaming never returns a WAV container.\n\
+    * Long input is internally chunked by the service. Internal chunk boundaries are\n  not visible in the\
+    \ generated audio contract.\n* Audio playback, audio-device control, synthesis history, request logging,\n\
+    \  performance history, and asynchronous job management are intentionally outside\n  this API.\n* Configuration\
+    \ backup/import/export follows the same operational model as the\n  sister OPAL Listen service.\n\n\nOPAL\
+    \ SUITE STANDARD v1.2 (normative)\nX-Opal-Session-Id is an optional logical context identifier; it does\
+    \ not create a server-managed session or grant authorization. Entry-point services generate one when absent\
+    \ where a workflow requires it, and propagate it unchanged. A preexisting service-local session resource\
+    \ has a separate lifecycle. X-Opal-Transaction-Id is a single logical end-to-end operation and is not an\
+    \ atomic distributed transaction. X-Opal-Request-Id identifies one inbound HTTP exchange and is regenerated\
+    \ for each downstream HTTP hop (the incoming one can be used for diagnostics); X-Opal-Causation-Id names\
+    \ the immediate parent event/request, where applicable. For inbound requests, if a transaction ID is absent\
+    \ the service assigns one; all response types (including errors, streamed headers, and binary bodies) return\
+    \ session ID if known and transaction/request IDs. Never trust these values for access control. Propagate\
+    \ them into derived ZeroMQ envelope metadata. All identifiers are opaque 1..128-character printable ASCII\
+    \ tokens with no control/whitespace characters; client-supplied invalid values yield 422.\nStandard health\
+    \ routes: /api/v1/health/, /api/v1/health/live, /api/v1/health/ready. Settings: GET and PATCH /api/v1/settings/\
+    \ exclusively; PATCH is atomic. Mutable configuration uses strong ETags and mandatory If-Match with 428\
+    \ missing, 412 stale. For bounded configuration catalogs return full arrays (subject to explicit deployment\
+    \ caps); for growing histories use cursor pagination with stable deterministic ordering, opaque next_cursor\
+    \ and has_more. Cursors are scoped to the exact filter set and invalidate on mismatch (422); cursor values\
+    \ expire explicitly. Standard HTTP creation 201 Location, async admission 202, empty deletion 204. Streaming\
+    \ keeps media-specific transports but exposes correlation headers, defined failure behavior, and no unsupported\
+    \ replay guarantee. Configuration export/import/validation excludes secrets and history.\n"
+tags:
+- name: engines
+  description: 'Discover and configure TTS engines installed by the service implementation.
+
+    Engines are not created or deleted through this API.
+
+    '
+- name: voices
+  description: 'Register and manage OPAL voices backed by engine-specific resources already
+
+    present on the host. Voice operations never upload, modify, or delete model files.
+
+    '
+- name: profiles
+  description: 'Manage reusable generation presets. Exactly one profile may be active at a time.
+
+    The active profile supplies defaults when a generation request does not name a
+
+    profile explicitly.
+
+    '
+- name: generate
+  description: 'Generate completed or progressively streamed speech audio from plain text.
+
+    SSML is not supported by version 1 of this contract.
+
+    '
+- name: settings
+  description: Service-wide key/value settings.
+- name: health
+  description: Service readiness and health information. Playback devices are out of scope.
+- name: backup
+  description: Backup, restore, import, export, and validate OPAL Talk configuration.
+paths:
+  /api/v1/engines/:
+    get:
+      tags:
+      - engines
+      summary: List Engines
+      description: 'Return all TTS engines known to the service implementation.
+
+
+        An engine can be known but unavailable, for example when its runtime dependency
+
+        is missing or initialization failed. `enabled` is administrative configuration;
+
+        `available` reports whether the implementation can currently use the engine.
+
+
+        Return the complete bounded configuration collection; pagination is not supported. An implementation
+        may reject catalog sizes over an advertised deployment cap, rather than silently truncate.
+
+        '
+      operationId: list_engines_api_v1_engines__get
+      responses:
+        '200':
+          description: Engines known to the service.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/EngineRead'
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+            ETag:
+              description: Strong revision of logical portable configuration
+              schema:
+                type: string
+        '422':
+          $ref: '#/components/responses/OpalError422'
+      parameters: []
+    parameters:
+    - $ref: '#/components/parameters/OpalSessionIdHeader'
+    - $ref: '#/components/parameters/OpalTransactionIdHeader'
+    - $ref: '#/components/parameters/OpalRequestIdHeader'
+    - $ref: '#/components/parameters/OpalCausationIdHeader'
+  /api/v1/engines/{engine_id}:
+    parameters:
+    - $ref: '#/components/parameters/EngineId'
+    - $ref: '#/components/parameters/OpalSessionIdHeader'
+    - $ref: '#/components/parameters/OpalTransactionIdHeader'
+    - $ref: '#/components/parameters/OpalRequestIdHeader'
+    - $ref: '#/components/parameters/OpalCausationIdHeader'
+    get:
+      tags:
+      - engines
+      summary: Get Engine
+      description: Return one installed engine and its current service configuration.
+      operationId: get_engine_api_v1_engines__engine_id__get
+      responses:
+        '200':
+          description: Engine details.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EngineRead'
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+            ETag:
+              description: Strong revision of logical portable configuration
+              schema:
+                type: string
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/OpalError422'
+    patch:
+      tags:
+      - engines
+      summary: Update Engine
+      description: 'Update mutable configuration for an installed engine.
+
+
+        This operation can enable or disable the engine and replace/adjust its opaque
+
+        engine configuration. It cannot install a new engine, remove an installed
+
+        engine, or upload engine binaries.
+
+        '
+      operationId: update_engine_api_v1_engines__engine_id__patch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EngineUpdate'
+      responses:
+        '200':
+          description: Updated engine.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EngineRead'
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationErrorResponse'
+        '412':
+          $ref: '#/components/responses/OpalError412'
+        '428':
+          $ref: '#/components/responses/OpalError428'
+      parameters:
+      - name: If-Match
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+        description: Required strong ETag for optimistic concurrency; missing 428, stale 412. DELETE without
+          existence is still subject to the precondition.
+  /api/v1/engines/{engine_id}/validate:
+    parameters:
+    - $ref: '#/components/parameters/EngineId'
+    - $ref: '#/components/parameters/OpalSessionIdHeader'
+    - $ref: '#/components/parameters/OpalTransactionIdHeader'
+    - $ref: '#/components/parameters/OpalRequestIdHeader'
+    - $ref: '#/components/parameters/OpalCausationIdHeader'
+    post:
+      tags:
+      - engines
+      summary: Validate Engine
+      description: 'Validate that the engine is correctly configured and usable by the service.
+
+
+        Validation should check the adapter/runtime and current engine configuration.
+
+        A validation failure is normally returned as HTTP 200 with `valid: false` and
+
+        diagnostic messages because the validation operation itself completed normally.
+
+        '
+      operationId: validate_engine_api_v1_engines__engine_id__validate_post
+      responses:
+        '200':
+          description: Engine validation result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationResult'
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/OpalError422'
+  /api/v1/voices/:
+    get:
+      tags:
+      - voices
+      summary: List Voices
+      description: 'List registered OPAL voices. Registrations describe host-resident voice/model
+
+        resources and their engine association; they do not contain the model data itself.
+
+
+        Return the complete bounded configuration collection; pagination is not supported. An implementation
+        may reject catalog sizes over an advertised deployment cap, rather than silently truncate.
+
+        '
+      operationId: list_voices_api_v1_voices__get
+      parameters:
+      - name: engine_id
+        in: query
+        required: false
+        description: If supplied, return only voices registered to this engine.
+        schema:
+          type: string
+          minLength: 1
+      - name: enabled
+        in: query
+        required: false
+        description: If supplied, filter by enabled state.
+        schema:
+          type: boolean
+      responses:
+        '200':
+          description: Registered voices.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/VoiceRead'
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+            ETag:
+              description: Strong revision of logical portable configuration
+              schema:
+                type: string
+        '422':
+          $ref: '#/components/responses/ValidationErrorResponse'
+    post:
+      tags:
+      - voices
+      summary: Register Voice
+      description: 'Register a host-resident voice/model resource with OPAL Talk.
+
+
+        `engine_voice_ref` is an opaque identifier interpreted only by the selected
+
+        engine adapter. It may represent a model path, installed voice name, composite
+
+        identifier, or another engine-defined reference. OPAL clients must not infer
+
+        filesystem semantics from it.
+
+
+        This endpoint does not upload, copy, download, or otherwise provision model
+
+        files. Implementations SHOULD validate that the referenced resource can be
+
+        resolved before accepting the registration.
+
+        '
+      operationId: create_voice_api_v1_voices__post
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VoiceCreate'
+      responses:
+        '201':
+          description: Voice registered successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VoiceRead'
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+            Location:
+              description: Resource URL
+              schema:
+                type: string
+        '404':
+          description: The specified engine does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+        '409':
+          description: The requested `voice_id` is already registered.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+        '422':
+          $ref: '#/components/responses/ValidationErrorResponse'
+    parameters:
+    - $ref: '#/components/parameters/OpalSessionIdHeader'
+    - $ref: '#/components/parameters/OpalTransactionIdHeader'
+    - $ref: '#/components/parameters/OpalRequestIdHeader'
+    - $ref: '#/components/parameters/OpalCausationIdHeader'
+  /api/v1/voices/{voice_id}:
+    parameters:
+    - $ref: '#/components/parameters/VoiceId'
+    - $ref: '#/components/parameters/OpalSessionIdHeader'
+    - $ref: '#/components/parameters/OpalTransactionIdHeader'
+    - $ref: '#/components/parameters/OpalRequestIdHeader'
+    - $ref: '#/components/parameters/OpalCausationIdHeader'
+    get:
+      tags:
+      - voices
+      summary: Get Voice
+      description: Return one registered voice.
+      operationId: get_voice_api_v1_voices__voice_id__get
+      responses:
+        '200':
+          description: Voice details.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VoiceRead'
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+            ETag:
+              description: Strong revision of logical portable configuration
+              schema:
+                type: string
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/OpalError422'
+    patch:
+      tags:
+      - voices
+      summary: Update Voice
+      description: 'Update a voice registration. The engine association and opaque
+
+        `engine_voice_ref` may be changed, but the referenced host resource itself is
+
+        never modified by this API.
+
+        '
+      operationId: update_voice_api_v1_voices__voice_id__patch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VoiceUpdate'
+      responses:
+        '200':
+          description: Updated voice registration.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VoiceRead'
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: The update would leave the voice in an incompatible or referenced state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+        '422':
+          $ref: '#/components/responses/ValidationErrorResponse'
+        '412':
+          $ref: '#/components/responses/OpalError412'
+        '428':
+          $ref: '#/components/responses/OpalError428'
+      parameters:
+      - name: If-Match
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+        description: Required strong ETag for optimistic concurrency; missing 428, stale 412. DELETE without
+          existence is still subject to the precondition.
+    delete:
+      tags:
+      - voices
+      summary: Unregister Voice
+      description: 'Remove the OPAL voice registration only.
+
+
+        The implementation MUST NOT delete the underlying model, voice files, engine
+
+        resources, or other host assets. If a profile currently references this voice,
+
+        the service SHOULD reject the operation with `409 Conflict` until the profile
+
+        is changed or removed.
+
+        '
+      operationId: delete_voice_api_v1_voices__voice_id__delete
+      responses:
+        '204':
+          description: Voice registration removed. No response body is returned.
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: The voice is still referenced by configuration such as a profile.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+        '422':
+          $ref: '#/components/responses/OpalError422'
+        '412':
+          $ref: '#/components/responses/OpalError412'
+        '428':
+          $ref: '#/components/responses/OpalError428'
+      parameters:
+      - name: If-Match
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+        description: Required strong ETag for optimistic concurrency; missing 428, stale 412. DELETE without
+          existence is still subject to the precondition.
+  /api/v1/voices/{voice_id}/validate:
+    parameters:
+    - $ref: '#/components/parameters/VoiceId'
+    - $ref: '#/components/parameters/OpalSessionIdHeader'
+    - $ref: '#/components/parameters/OpalTransactionIdHeader'
+    - $ref: '#/components/parameters/OpalRequestIdHeader'
+    - $ref: '#/components/parameters/OpalCausationIdHeader'
+    post:
+      tags:
+      - voices
+      summary: Validate Voice
+      description: 'Ask the registered engine to validate that this voice registration can be
+
+        resolved and is usable. Validation may include model metadata checks or a
+
+        lightweight engine-specific load check but does not return generated speech.
+
+        '
+      operationId: validate_voice_api_v1_voices__voice_id__validate_post
+      responses:
+        '200':
+          description: Voice validation result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationResult'
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/OpalError422'
+  /api/v1/voices/{voice_id}/test:
+    parameters:
+    - $ref: '#/components/parameters/VoiceId'
+    - $ref: '#/components/parameters/OpalSessionIdHeader'
+    - $ref: '#/components/parameters/OpalTransactionIdHeader'
+    - $ref: '#/components/parameters/OpalRequestIdHeader'
+    - $ref: '#/components/parameters/OpalCausationIdHeader'
+    post:
+      tags:
+      - voices
+      summary: Test Voice
+      description: 'Generate a short test utterance with this voice.
+
+
+        The path selects the voice. Request fields can adjust the portable generation
+
+        controls and engine-specific options. Unlike `/generate/stream`, this operation
+
+        returns completed WAV or PCM audio.
+
+        '
+      operationId: test_voice_api_v1_voices__voice_id__test_post
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VoiceTestRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/AudioResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationErrorResponse'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /api/v1/profiles/:
+    get:
+      tags:
+      - profiles
+      summary: List Profiles
+      description: 'List reusable TTS generation profiles.
+
+        Return the complete bounded configuration collection; pagination is not supported. An implementation
+        may reject catalog sizes over an advertised deployment cap, rather than silently truncate.
+
+        '
+      operationId: list_profiles_api_v1_profiles__get
+      responses:
+        '200':
+          description: Configured profiles.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProfileRead'
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+            ETag:
+              description: Strong revision of logical portable configuration
+              schema:
+                type: string
+        '422':
+          $ref: '#/components/responses/OpalError422'
+      parameters: []
+    post:
+      tags:
+      - profiles
+      summary: Create Profile
+      description: 'Create a reusable set of generation defaults. A profile identifies a voice and
+
+        may define speed, volume, output format, sample rate, and engine-specific options.
+
+
+        If `is_active` is true, the newly created profile becomes the only active profile.
+
+        '
+      operationId: create_profile_api_v1_profiles__post
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProfileCreate'
+      responses:
+        '201':
+          description: Profile created successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileRead'
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+            Location:
+              description: Resource URL
+              schema:
+                type: string
+        '404':
+          description: The referenced voice does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationErrorResponse'
+    parameters:
+    - $ref: '#/components/parameters/OpalSessionIdHeader'
+    - $ref: '#/components/parameters/OpalTransactionIdHeader'
+    - $ref: '#/components/parameters/OpalRequestIdHeader'
+    - $ref: '#/components/parameters/OpalCausationIdHeader'
+  /api/v1/profiles/{profile_id}:
+    parameters:
+    - $ref: '#/components/parameters/ProfileId'
+    - $ref: '#/components/parameters/OpalSessionIdHeader'
+    - $ref: '#/components/parameters/OpalTransactionIdHeader'
+    - $ref: '#/components/parameters/OpalRequestIdHeader'
+    - $ref: '#/components/parameters/OpalCausationIdHeader'
+    get:
+      tags:
+      - profiles
+      summary: Get Profile
+      description: Return one generation profile.
+      operationId: get_profile_api_v1_profiles__profile_id__get
+      responses:
+        '200':
+          description: Profile details.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileRead'
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+            ETag:
+              description: Strong revision of logical portable configuration
+              schema:
+                type: string
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationErrorResponse'
+    patch:
+      tags:
+      - profiles
+      summary: Update Profile
+      description: 'Partially update profile defaults. If `is_active` is changed to true, all other
+
+        profiles are deactivated.
+
+        '
+      operationId: update_profile_api_v1_profiles__profile_id__patch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProfileUpdate'
+      responses:
+        '200':
+          description: Updated profile.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileRead'
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationErrorResponse'
+        '412':
+          $ref: '#/components/responses/OpalError412'
+        '428':
+          $ref: '#/components/responses/OpalError428'
+      parameters:
+      - name: If-Match
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+        description: Required strong ETag for optimistic concurrency; missing 428, stale 412. DELETE without
+          existence is still subject to the precondition.
+    delete:
+      tags:
+      - profiles
+      summary: Delete Profile
+      description: 'Delete a profile. The active profile SHOULD NOT be deleted directly; activate
+
+        another profile first. Implementations should return `409 Conflict` when deletion
+
+        would leave configuration in an invalid active-profile state.
+
+        '
+      operationId: delete_profile_api_v1_profiles__profile_id__delete
+      responses:
+        '204':
+          description: Profile deleted. No response body is returned.
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationErrorResponse'
+        '412':
+          $ref: '#/components/responses/OpalError412'
+        '428':
+          $ref: '#/components/responses/OpalError428'
+      parameters:
+      - name: If-Match
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+        description: Required strong ETag for optimistic concurrency; missing 428, stale 412. DELETE without
+          existence is still subject to the precondition.
+  /api/v1/profiles/{profile_id}/activate:
+    parameters:
+    - $ref: '#/components/parameters/ProfileId'
+    - $ref: '#/components/parameters/OpalSessionIdHeader'
+    - $ref: '#/components/parameters/OpalTransactionIdHeader'
+    - $ref: '#/components/parameters/OpalRequestIdHeader'
+    - $ref: '#/components/parameters/OpalCausationIdHeader'
+    post:
+      tags:
+      - profiles
+      summary: Activate Profile
+      description: Set this profile as active, deactivating all other profiles.
+      operationId: activate_profile_api_v1_profiles__profile_id__activate_post
+      responses:
+        '200':
+          description: Activated profile.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileRead'
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: The profile cannot be activated because its voice or engine is unusable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+        '422':
+          $ref: '#/components/responses/ValidationErrorResponse'
+  /api/v1/generate:
+    post:
+      tags:
+      - generate
+      summary: Generate Audio
+      description: "Generate completed speech audio from plain text.\n\nThe service may internally split long\
+        \ text into multiple engine calls, but it\nMUST preserve the original text order and return one logically\
+        \ continuous audio\nresult. Internal chunk boundaries are not part of the public API.\n\nGeneration\
+        \ settings are resolved in this order, from lowest to highest precedence:\n\n1. Service defaults.\n\
+        2. The active profile, when `profile_id` is omitted and an active profile exists.\n3. The explicitly\
+        \ selected `profile_id`, when present.\n4. Fields supplied directly in this request.\n\nRequest-level\
+        \ `engine_options` are shallow-merged over profile-level\n`engine_options`; request keys win. Other\
+        \ request fields directly replace their\ncorresponding profile defaults.\n\nVoice and engine selection:\n\
+        \n* A request-level `voice_id` overrides the profile voice.\n* The resolved voice normally determines\
+        \ the engine.\n* `engine_id` is an optional advanced override. The service MUST reject an\n  override\
+        \ that cannot use the resolved voice rather than silently substituting\n  another voice.\n* If no voice\
+        \ can be resolved from either the request or a profile, generation\n  fails with `409 Conflict`.\n\n\
+        Output behavior:\n\n* `wav` returns a completed WAV container as `audio/wav`.\n* `pcm` returns headerless\
+        \ signed 16-bit little-endian mono PCM as\n  `application/octet-stream`.\n* The actual output sample\
+        \ rate is always returned in `X-Opal-Sample-Rate`.\n* When a `sample_rate` is explicitly requested,\
+        \ the service either returns audio\n  at that rate or rejects the request; it must not silently return\
+        \ another rate.\n* Plain text only is accepted. SSML markup has no special meaning and is not a\n \
+        \ supported input mode.\n"
+      operationId: generate_audio_api_v1_generate_post
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GenerateRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/AudioResponse'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '422':
+          $ref: '#/components/responses/ValidationErrorResponse'
+        '500':
+          $ref: '#/components/responses/GenerationFailed'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+    parameters:
+    - $ref: '#/components/parameters/OpalSessionIdHeader'
+    - $ref: '#/components/parameters/OpalTransactionIdHeader'
+    - $ref: '#/components/parameters/OpalRequestIdHeader'
+    - $ref: '#/components/parameters/OpalCausationIdHeader'
+  /api/v1/generate/stream:
+    post:
+      tags:
+      - generate
+      summary: Stream Generated Audio
+      description: "Generate speech synchronously while progressively streaming raw PCM bytes to the\ncaller.\n\
+        \nThis endpoint always returns headerless signed 16-bit little-endian mono PCM.\nWAV is intentionally\
+        \ not supported for streaming because the contract does not\nrequire buffering a complete container\
+        \ before response delivery.\n\nThe request follows the same profile, voice, engine, speed, volume,\
+        \ sample-rate,\nand `engine_options` resolution rules as `/api/v1/generate`. There is no\n`output_format`\
+        \ field because the streaming format is fixed to PCM.\n\nStreaming semantics:\n\n* HTTP status and\
+        \ response headers are established before audio bytes are sent.\n* The actual sample rate is supplied\
+        \ by `X-Opal-Sample-Rate` and remains constant\n  for the entire stream.\n* The channel count is always\
+        \ one and sample format is always `s16le`.\n* The byte stream contains audio samples only—no WAV header,\
+        \ chunk markers,\n  events, JSON envelopes, or internal text-chunk metadata.\n* Callers consume bytes\
+        \ until normal end-of-stream.\n* If generation fails before streaming begins, the service returns a\
+        \ normal JSON\n  error response with an appropriate non-2xx status.\n* If generation fails after a\
+        \ 200 response has begun, the service terminates the\n  stream. Clients MUST treat premature termination\
+        \ as a failed generation; the\n  protocol does not inject an error object into the audio byte stream.\n\
+        * Service-side text chunking MUST NOT reset sample format or sample rate between\n  internal chunks.\n"
+      operationId: stream_audio_api_v1_generate_stream_post
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GenerateStreamRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/PcmStreamResponse'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '422':
+          $ref: '#/components/responses/ValidationErrorResponse'
+        '500':
+          $ref: '#/components/responses/GenerationFailed'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+    parameters:
+    - $ref: '#/components/parameters/OpalSessionIdHeader'
+    - $ref: '#/components/parameters/OpalTransactionIdHeader'
+    - $ref: '#/components/parameters/OpalRequestIdHeader'
+    - $ref: '#/components/parameters/OpalCausationIdHeader'
+  /api/v1/settings/:
+    get:
+      tags:
+      - settings
+      summary: Get All Settings
+      description: 'Return all service-wide settings as a key/value object. Setting keys are
+
+        implementation-defined unless separately standardized by the OPAL Talk service.
+
+        '
+      operationId: get_all_settings_api_v1_settings__get
+      responses:
+        '200':
+          description: Current settings keyed by setting name.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+            ETag:
+              description: Strong revision of logical portable configuration
+              schema:
+                type: string
+        '422':
+          $ref: '#/components/responses/OpalError422'
+    patch:
+      tags:
+      - settings
+      summary: Atomically patch portable settings
+      operationId: patch_talk_settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              additionalProperties: true
+      responses:
+        '200':
+          description: Updated portable settings
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+        '412':
+          $ref: '#/components/responses/OpalError412'
+        '428':
+          $ref: '#/components/responses/OpalError428'
+        '422':
+          $ref: '#/components/responses/OpalError422'
+      parameters:
+      - name: If-Match
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+        description: Required strong ETag for optimistic concurrency; missing 428, stale 412. DELETE without
+          existence is still subject to the precondition.
+    parameters:
+    - $ref: '#/components/parameters/OpalSessionIdHeader'
+    - $ref: '#/components/parameters/OpalTransactionIdHeader'
+    - $ref: '#/components/parameters/OpalRequestIdHeader'
+    - $ref: '#/components/parameters/OpalCausationIdHeader'
+  /api/v1/health/:
+    get:
+      tags:
+      - health
+      summary: Health Check
+      description: 'Return service readiness information, including the state of configured engines.
+
+        This endpoint intentionally contains no audio playback/device information.
+
+        '
+      operationId: health_check_api_v1_health__get
+      responses:
+        '200':
+          description: Service health state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthRead'
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+        '422':
+          $ref: '#/components/responses/OpalError422'
+    parameters:
+    - $ref: '#/components/parameters/OpalSessionIdHeader'
+    - $ref: '#/components/parameters/OpalTransactionIdHeader'
+    - $ref: '#/components/parameters/OpalRequestIdHeader'
+    - $ref: '#/components/parameters/OpalCausationIdHeader'
+  /api/v1/backup/list:
+    get:
+      tags:
+      - backup
+      summary: List Backups
+      description: List backups available to this OPAL Talk instance.
+      operationId: list_backups_api_v1_backup_list_get
+      responses:
+        '200':
+          description: Available backups.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BackupRead'
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+        '422':
+          $ref: '#/components/responses/OpalError422'
+    parameters:
+    - $ref: '#/components/parameters/OpalSessionIdHeader'
+    - $ref: '#/components/parameters/OpalTransactionIdHeader'
+    - $ref: '#/components/parameters/OpalRequestIdHeader'
+    - $ref: '#/components/parameters/OpalCausationIdHeader'
+  /api/v1/backup/create:
+    post:
+      tags:
+      - backup
+      summary: Create Backup
+      description: 'Create a service configuration backup.
+
+
+        Backups contain OPAL Talk configuration and registrations but MUST NOT be
+
+        interpreted as a model-package format. Host-installed engines, model binaries,
+
+        and voice/model files are not required to be copied into the backup. Restoring
+
+        onto another host may therefore require the corresponding resources to be
+
+        installed separately.
+
+        '
+      operationId: create_backup_api_v1_backup_create_post
+      responses:
+        '200':
+          description: Backup created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BackupCreateResponse'
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+        '500':
+          $ref: '#/components/responses/OperationFailed'
+        '422':
+          $ref: '#/components/responses/OpalError422'
+    parameters:
+    - $ref: '#/components/parameters/OpalSessionIdHeader'
+    - $ref: '#/components/parameters/OpalTransactionIdHeader'
+    - $ref: '#/components/parameters/OpalRequestIdHeader'
+    - $ref: '#/components/parameters/OpalCausationIdHeader'
+  /api/v1/backup/download/{filename}:
+    parameters:
+    - $ref: '#/components/parameters/BackupFilename'
+    - $ref: '#/components/parameters/OpalSessionIdHeader'
+    - $ref: '#/components/parameters/OpalTransactionIdHeader'
+    - $ref: '#/components/parameters/OpalRequestIdHeader'
+    - $ref: '#/components/parameters/OpalCausationIdHeader'
+    get:
+      tags:
+      - backup
+      summary: Download Backup
+      description: 'Download a previously created backup file. `filename` is a backup identifier,
+
+        not an arbitrary filesystem path; path traversal and path separators MUST be
+
+        rejected.
+
+        '
+      operationId: download_backup_api_v1_backup_download__filename__get
+      responses:
+        '200':
+          description: Backup file contents.
+          headers:
+            Content-Disposition:
+              description: Suggested download filename.
+              schema:
+                type: string
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationErrorResponse'
+  /api/v1/backup/restore/{filename}:
+    parameters:
+    - $ref: '#/components/parameters/BackupFilename'
+    - $ref: '#/components/parameters/OpalSessionIdHeader'
+    - $ref: '#/components/parameters/OpalTransactionIdHeader'
+    - $ref: '#/components/parameters/OpalRequestIdHeader'
+    - $ref: '#/components/parameters/OpalCausationIdHeader'
+    post:
+      tags:
+      - backup
+      summary: Restore Backup
+      description: 'Restore service configuration from a named backup.
+
+
+        The service SHOULD validate the backup before applying it. A failed restore MUST
+
+        NOT intentionally leave a partially applied configuration. Host-resident engine
+
+        and voice resources referenced by the restored configuration remain external to
+
+        the backup and can subsequently be checked through the validation endpoints.
+
+        '
+      operationId: restore_backup_api_v1_backup_restore__filename__post
+      responses:
+        '200':
+          description: Restore completed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationResult'
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationErrorResponse'
+        '500':
+          $ref: '#/components/responses/OperationFailed'
+  /api/v1/backup/{filename}:
+    parameters:
+    - $ref: '#/components/parameters/BackupFilename'
+    - $ref: '#/components/parameters/OpalSessionIdHeader'
+    - $ref: '#/components/parameters/OpalTransactionIdHeader'
+    - $ref: '#/components/parameters/OpalRequestIdHeader'
+    - $ref: '#/components/parameters/OpalCausationIdHeader'
+    delete:
+      tags:
+      - backup
+      summary: Delete Backup
+      description: Delete a named backup file managed by OPAL Talk.
+      operationId: delete_backup_api_v1_backup__filename__delete
+      responses:
+        '204':
+          description: Backup deleted. No response body is returned.
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationErrorResponse'
+  /api/v1/backup/export:
+    get:
+      tags:
+      - backup
+      summary: Export Config
+      description: 'Export the full logical OPAL Talk configuration as JSON. The export describes
+
+        engine configuration, voice registrations, profiles, and service settings; it
+
+        does not embed engine binaries or voice/model files.
+
+        '
+      operationId: export_config_api_v1_backup_export_get
+      responses:
+        '200':
+          description: Full logical service configuration.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigExport'
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+        '422':
+          $ref: '#/components/responses/OpalError422'
+    parameters:
+    - $ref: '#/components/parameters/OpalSessionIdHeader'
+    - $ref: '#/components/parameters/OpalTransactionIdHeader'
+    - $ref: '#/components/parameters/OpalRequestIdHeader'
+    - $ref: '#/components/parameters/OpalCausationIdHeader'
+  /api/v1/backup/import:
+    post:
+      tags:
+      - backup
+      summary: Import Config
+      description: 'Import OPAL Talk configuration from YAML files in `./config/`, matching the
+
+        sister OPAL Listen operational convention.
+
+
+        The implementation SHOULD validate all candidate configuration before applying
+
+        changes and SHOULD avoid partially applying an invalid configuration set.
+
+        Importing registration data never provisions engine binaries or voice/model files.
+
+        '
+      operationId: import_config_api_v1_backup_import_post
+      responses:
+        '200':
+          description: Import result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigImportResult'
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/OperationFailed'
+        '422':
+          $ref: '#/components/responses/OpalError422'
+    parameters:
+    - $ref: '#/components/parameters/OpalSessionIdHeader'
+    - $ref: '#/components/parameters/OpalTransactionIdHeader'
+    - $ref: '#/components/parameters/OpalRequestIdHeader'
+    - $ref: '#/components/parameters/OpalCausationIdHeader'
+  /api/v1/backup/validate:
+    get:
+      tags:
+      - backup
+      summary: Validate Config
+      description: 'Validate configuration without performing speech generation. Validation should
+
+        cover structural configuration, references between profiles/voices/engines, and
+
+        implementation-specific configuration rules. It need not fully load every model
+
+        unless the implementation chooses to do so.
+
+        '
+      operationId: validate_config_api_v1_backup_validate_get
+      responses:
+        '200':
+          description: Configuration validation result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationResult'
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+        '422':
+          $ref: '#/components/responses/OpalError422'
+    post:
+      tags:
+      - backup
+      operationId: validate_talk_backup_payload
+      description: Validate supplied backup without side effects.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Validation results
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+        '422':
+          $ref: '#/components/responses/OpalError422'
+    parameters:
+    - $ref: '#/components/parameters/OpalSessionIdHeader'
+    - $ref: '#/components/parameters/OpalTransactionIdHeader'
+    - $ref: '#/components/parameters/OpalRequestIdHeader'
+    - $ref: '#/components/parameters/OpalCausationIdHeader'
+  /:
+    get:
+      summary: Root
+      description: Return basic service identity and API version information.
+      operationId: root__get
+      responses:
+        '200':
+          description: Service identity.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceInfo'
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+        '422':
+          $ref: '#/components/responses/OpalError422'
+    parameters:
+    - $ref: '#/components/parameters/OpalSessionIdHeader'
+    - $ref: '#/components/parameters/OpalTransactionIdHeader'
+    - $ref: '#/components/parameters/OpalRequestIdHeader'
+    - $ref: '#/components/parameters/OpalCausationIdHeader'
+  /healthz:
+    get:
+      summary: Healthz
+      description: 'Lightweight liveness endpoint suitable for process supervisors and container
+
+        probes. This endpoint indicates that the HTTP service is alive; callers needing
+
+        engine readiness should use `/api/v1/health/`.
+
+        '
+      operationId: healthz_healthz_get
+      responses:
+        '200':
+          description: Service process is alive.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LivenessRead'
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+        '422':
+          $ref: '#/components/responses/OpalError422'
+    parameters:
+    - $ref: '#/components/parameters/OpalSessionIdHeader'
+    - $ref: '#/components/parameters/OpalTransactionIdHeader'
+    - $ref: '#/components/parameters/OpalRequestIdHeader'
+    - $ref: '#/components/parameters/OpalCausationIdHeader'
+  /api/v1/health/live:
+    get:
+      tags:
+      - health
+      operationId: get_talk_health_live
+      summary: Liveness probe
+      responses:
+        '200':
+          description: Health probe
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpalHealthProbe'
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+        '503':
+          description: Service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpalHealthProbe'
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+        '422':
+          $ref: '#/components/responses/OpalError422'
+    parameters:
+    - $ref: '#/components/parameters/OpalSessionIdHeader'
+    - $ref: '#/components/parameters/OpalTransactionIdHeader'
+    - $ref: '#/components/parameters/OpalRequestIdHeader'
+    - $ref: '#/components/parameters/OpalCausationIdHeader'
+  /api/v1/health/ready:
+    get:
+      tags:
+      - health
+      operationId: get_talk_health_ready
+      summary: Readiness probe
+      responses:
+        '200':
+          description: Health probe
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpalHealthProbe'
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+        '503':
+          description: Readiness unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpalHealthProbe'
+          headers:
+            X-Opal-Session-Id:
+              $ref: '#/components/headers/OpalSessionIdHeader'
+            X-Opal-Transaction-Id:
+              $ref: '#/components/headers/OpalTransactionIdHeader'
+            X-Opal-Request-Id:
+              $ref: '#/components/headers/OpalRequestIdHeader'
+            X-Opal-Causation-Id:
+              $ref: '#/components/headers/OpalCausationIdHeader'
+        '422':
+          $ref: '#/components/responses/OpalError422'
+    parameters:
+    - $ref: '#/components/parameters/OpalSessionIdHeader'
+    - $ref: '#/components/parameters/OpalTransactionIdHeader'
+    - $ref: '#/components/parameters/OpalRequestIdHeader'
+    - $ref: '#/components/parameters/OpalCausationIdHeader'
+components:
+  parameters:
+    EngineId:
+      name: engine_id
+      in: path
+      required: true
+      description: Stable implementation-defined identifier of an installed TTS engine.
+      schema:
+        type: string
+        minLength: 1
+      example: piper
+    VoiceId:
+      name: voice_id
+      in: path
+      required: true
+      description: Globally unique OPAL voice identifier.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 200
+        pattern: ^[A-Za-z0-9][A-Za-z0-9._-]*$
+      example: en-us-lessac-medium
+    ProfileId:
+      name: profile_id
+      in: path
+      required: true
+      description: Numeric profile identifier.
+      schema:
+        type: integer
+        minimum: 1
+      example: 1
+    BackupFilename:
+      name: filename
+      in: path
+      required: true
+      description: 'Filename/identifier of a backup managed by the service. It must not contain
+
+        path separators or traversal components.
+
+        '
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 255
+        pattern: ^[^/\\]+$
+      example: opal-talk-2026-10-04T230000Z.tar.gz
+    OpalSessionIdHeader:
+      name: X-Opal-Session-Id
+      in: header
+      required: false
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: ^[!-~]+$
+      description: OPAL suite context propagation; opaque and not an authentication credential.
+    OpalTransactionIdHeader:
+      name: X-Opal-Transaction-Id
+      in: header
+      required: false
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: ^[!-~]+$
+      description: OPAL suite context propagation; opaque and not an authentication credential.
+    OpalRequestIdHeader:
+      name: X-Opal-Request-Id
+      in: header
+      required: false
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: ^[!-~]+$
+      description: OPAL suite context propagation; opaque and not an authentication credential.
+    OpalCausationIdHeader:
+      name: X-Opal-Causation-Id
+      in: header
+      required: false
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: ^[!-~]+$
+      description: OPAL suite context propagation; opaque and not an authentication credential.
+  headers:
+    AudioFormat:
+      description: Logical output format returned in the response body.
+      schema:
+        $ref: '#/components/schemas/AudioFormat'
+    SampleRate:
+      description: Actual audio sample rate in Hz. Constant for the entire response body.
+      schema:
+        type: integer
+        minimum: 8000
+        maximum: 192000
+      example: 22050
+    Channels:
+      description: Number of audio channels. OPAL Talk v1 returns mono audio only.
+      schema:
+        type: integer
+        enum:
+        - 1
+    SampleFormat:
+      description: PCM sample representation. OPAL Talk v1 standardizes on signed 16-bit little-endian.
+      schema:
+        type: string
+        enum:
+        - s16le
+    ResolvedEngineId:
+      description: Engine actually used for generation.
+      schema:
+        type: string
+      example: piper
+    ResolvedVoiceId:
+      description: OPAL voice actually used for generation.
+      schema:
+        type: string
+      example: en-us-lessac-medium
+    ResolvedProfileId:
+      description: Profile used to supply defaults, when a profile participated in resolution.
+      schema:
+        type: integer
+        minimum: 1
+      example: 1
+    OpalSessionIdHeader:
+      description: Effective OPAL context for this response.
+      schema:
+        type: string
+    OpalTransactionIdHeader:
+      description: Effective OPAL context for this response.
+      schema:
+        type: string
+    OpalRequestIdHeader:
+      description: Effective OPAL context for this response.
+      schema:
+        type: string
+    OpalCausationIdHeader:
+      description: Effective OPAL context for this response.
+      schema:
+        type: string
+  responses:
+    AudioResponse:
+      description: 'Completed generated audio. The media type corresponds to the resolved
+
+        `output_format`. PCM bodies are headerless S16LE mono samples.
+
+        '
+      headers:
+        X-Opal-Audio-Format:
+          $ref: '#/components/headers/AudioFormat'
+        X-Opal-Sample-Rate:
+          $ref: '#/components/headers/SampleRate'
+        X-Opal-Channels:
+          $ref: '#/components/headers/Channels'
+        X-Opal-Sample-Format:
+          $ref: '#/components/headers/SampleFormat'
+        X-Opal-Engine-Id:
+          $ref: '#/components/headers/ResolvedEngineId'
+        X-Opal-Voice-Id:
+          $ref: '#/components/headers/ResolvedVoiceId'
+        X-Opal-Profile-Id:
+          $ref: '#/components/headers/ResolvedProfileId'
+      content:
+        audio/wav:
+          schema:
+            type: string
+            format: binary
+        application/octet-stream:
+          schema:
+            type: string
+            format: binary
+    PcmStreamResponse:
+      description: 'Progressive raw PCM audio stream. Bytes are S16LE, mono, with no container,
+
+        framing, JSON envelope, or chunk metadata. The response ends when generation
+
+        completes. Transport-level chunk boundaries have no audio semantic meaning.
+
+        '
+      headers:
+        X-Opal-Audio-Format:
+          description: Always `pcm` for this endpoint.
+          schema:
+            type: string
+            enum:
+            - pcm
+        X-Opal-Sample-Rate:
+          $ref: '#/components/headers/SampleRate'
+        X-Opal-Channels:
+          $ref: '#/components/headers/Channels'
+        X-Opal-Sample-Format:
+          $ref: '#/components/headers/SampleFormat'
+        X-Opal-Engine-Id:
+          $ref: '#/components/headers/ResolvedEngineId'
+        X-Opal-Voice-Id:
+          $ref: '#/components/headers/ResolvedVoiceId'
+        X-Opal-Profile-Id:
+          $ref: '#/components/headers/ResolvedProfileId'
+      content:
+        application/octet-stream:
+          schema:
+            type: string
+            format: binary
+    NotFound:
+      description: Requested resource was not found.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: Request is structurally valid but conflicts with current configuration or resource state.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    PayloadTooLarge:
+      description: Input text exceeds the service's configured maximum accepted request size.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ValidationErrorResponse:
+      description: Request validation error.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/HTTPValidationError'
+    GenerationFailed:
+      description: TTS generation failed after the request was accepted for processing.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ServiceUnavailable:
+      description: The resolved engine or a required TTS runtime dependency is currently unavailable.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    OperationFailed:
+      description: The requested operational action failed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    OpalError412:
+      description: OPAL standard error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/OpalError'
+    OpalError428:
+      description: OPAL standard error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/OpalError'
+    OpalError422:
+      description: OPAL standard error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/OpalError'
+  schemas:
+    AudioFormat:
+      type: string
+      enum:
+      - wav
+      - pcm
+      description: '`wav` is a completed WAV container. `pcm` is headerless signed 16-bit
+
+        little-endian mono PCM.
+
+        '
+      example: wav
+    EngineOptions:
+      type: object
+      additionalProperties: true
+      description: 'Opaque engine-specific options. The public contract deliberately does not define
+
+        these keys or values. They are interpreted only by the resolved engine adapter.
+
+
+        Portable behavior should use the standardized OPAL fields whenever possible.
+
+        Implementations SHOULD reject unsupported or invalid engine options rather than
+
+        silently ignoring them. Sensitive credentials or secrets SHOULD NOT be exposed
+
+        through this object.
+
+        '
+      example:
+        noise_scale: 0.667
+    EngineRead:
+      type: object
+      required:
+      - engine_id
+      - name
+      - enabled
+      - available
+      - options
+      - metadata
+      properties:
+        engine_id:
+          type: string
+          minLength: 1
+          description: Stable engine identifier used by API requests and voice registrations.
+          example: piper
+        name:
+          type: string
+          minLength: 1
+          description: Human-readable engine name.
+          example: Piper
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Optional human-readable engine description.
+          example: Local neural text-to-speech engine
+        enabled:
+          type: boolean
+          description: Whether OPAL Talk is administratively allowed to route generation to this engine.
+          example: true
+        available:
+          type: boolean
+          description: Whether the implementation can currently initialize and use the engine.
+          example: true
+        options:
+          $ref: '#/components/schemas/EngineOptions'
+        metadata:
+          type: object
+          additionalProperties: true
+          readOnly: true
+          description: 'Read-only implementation-reported engine metadata such as runtime version or
+
+            adapter information. Clients must not require engine-specific metadata keys.
+
+            '
+          example:
+            version: 1.3.0
+    EngineUpdate:
+      type: object
+      minProperties: 1
+      additionalProperties: false
+      description: Mutable engine configuration.
+      properties:
+        enabled:
+          type: boolean
+          description: Enable or disable routing to this installed engine.
+        options:
+          $ref: '#/components/schemas/EngineOptions'
+      example:
+        enabled: true
+        options:
+          use_cuda: false
+    VoiceCreate:
+      type: object
+      additionalProperties: false
+      required:
+      - voice_id
+      - name
+      - engine_id
+      - engine_voice_ref
+      properties:
+        voice_id:
+          type: string
+          minLength: 1
+          maxLength: 200
+          pattern: ^[A-Za-z0-9][A-Za-z0-9._-]*$
+          description: Globally unique OPAL identifier for this voice registration.
+          example: en-us-lessac-medium
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Human-readable voice name.
+          example: Lessac Medium
+        description:
+          anyOf:
+          - type: string
+            maxLength: 1000
+          - type: 'null'
+          description: Optional human-readable description.
+        engine_id:
+          type: string
+          minLength: 1
+          description: Installed engine that owns/interprets `engine_voice_ref`.
+          example: piper
+        engine_voice_ref:
+          type: string
+          minLength: 1
+          maxLength: 2048
+          description: 'Opaque engine-specific reference to a voice/model resource already available
+
+            on the host. Although an implementation may use a filesystem path here,
+
+            clients must treat the value as an opaque string.
+
+            '
+          example: /opt/opal/voices/en_US-lessac-medium.onnx
+        language:
+          anyOf:
+          - type: string
+            maxLength: 64
+          - type: 'null'
+          description: Optional BCP 47-style language tag or implementation-provided language label.
+          example: en-US
+        enabled:
+          type: boolean
+          default: true
+          description: Whether this voice may be selected for generation.
+        engine_options:
+          $ref: '#/components/schemas/EngineOptions'
+      example:
+        voice_id: en-us-lessac-medium
+        name: Lessac Medium
+        engine_id: piper
+        engine_voice_ref: /opt/opal/voices/en_US-lessac-medium.onnx
+        language: en-US
+        enabled: true
+        engine_options: {}
+    VoiceUpdate:
+      type: object
+      minProperties: 1
+      additionalProperties: false
+      description: Partial update to a registered voice.
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          anyOf:
+          - type: string
+            maxLength: 1000
+          - type: 'null'
+        engine_id:
+          type: string
+          minLength: 1
+          description: Reassign this registration to another installed engine.
+        engine_voice_ref:
+          type: string
+          minLength: 1
+          maxLength: 2048
+          description: New opaque host-resource reference interpreted by the engine.
+        language:
+          anyOf:
+          - type: string
+            maxLength: 64
+          - type: 'null'
+        enabled:
+          type: boolean
+        engine_options:
+          $ref: '#/components/schemas/EngineOptions'
+    VoiceRead:
+      type: object
+      required:
+      - voice_id
+      - name
+      - engine_id
+      - engine_voice_ref
+      - enabled
+      - engine_options
+      - metadata
+      - created_at
+      - updated_at
+      properties:
+        voice_id:
+          type: string
+          description: Globally unique OPAL voice identifier.
+          example: en-us-lessac-medium
+        name:
+          type: string
+          description: Human-readable voice name.
+          example: Lessac Medium
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+        engine_id:
+          type: string
+          description: Engine associated with this registration.
+          example: piper
+        engine_voice_ref:
+          type: string
+          description: Opaque engine-specific reference to the host-resident voice/model resource.
+          example: /opt/opal/voices/en_US-lessac-medium.onnx
+        language:
+          anyOf:
+          - type: string
+          - type: 'null'
+          example: en-US
+        enabled:
+          type: boolean
+        native_sample_rate:
+          anyOf:
+          - type: integer
+            minimum: 8000
+            maximum: 192000
+          - type: 'null'
+          readOnly: true
+          description: Native voice/engine sample rate when known; not a guarantee about requested output rate.
+          example: 22050
+        engine_options:
+          $ref: '#/components/schemas/EngineOptions'
+        metadata:
+          type: object
+          additionalProperties: true
+          readOnly: true
+          description: Read-only engine-reported voice metadata. Keys are not standardized.
+          example:
+            quality: medium
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    PortableGenerationOptions:
+      type: object
+      description: 'Engine-neutral generation controls shared by completed and streaming generation.
+
+        These fields are standardized by OPAL Talk and must retain the same meaning
+
+        regardless of the selected engine.
+
+        '
+      properties:
+        speed:
+          type: number
+          format: float
+          minimum: 0.25
+          maximum: 4.0
+          default: 1.0
+          description: Speech-rate multiplier. `1.0` is normal speed; `0.5` is half speed; `2.0` is double
+            speed.
+        volume:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 2.0
+          default: 1.0
+          description: Linear output gain. `1.0` is unchanged, `0.0` is silence, and `2.0` is approximately
+            double amplitude before clipping control.
+        sample_rate:
+          anyOf:
+          - type: integer
+            minimum: 8000
+            maximum: 192000
+          - type: 'null'
+          description: 'Requested output sample rate in Hz. If omitted/null, the service chooses an
+
+            appropriate rate, commonly the voice''s native rate. If explicitly requested,
+
+            the accepted response must use exactly this rate.
+
+            '
+        engine_options:
+          $ref: '#/components/schemas/EngineOptions'
+    ProfileCreate:
+      type: object
+      additionalProperties: false
+      required:
+      - name
+      - voice_id
+      description: Create a reusable TTS generation preset.
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Unique or human-distinguishable profile name.
+          example: default
+        description:
+          anyOf:
+          - type: string
+            maxLength: 1000
+          - type: 'null'
+        is_active:
+          type: boolean
+          default: false
+          description: If true, activate this profile and deactivate all others.
+        voice_id:
+          type: string
+          minLength: 1
+          description: Registered voice used by default for this profile.
+          example: en-us-lessac-medium
+        speed:
+          type: number
+          format: float
+          minimum: 0.25
+          maximum: 4.0
+          default: 1.0
+        volume:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 2.0
+          default: 1.0
+        output_format:
+          allOf:
+          - $ref: '#/components/schemas/AudioFormat'
+          default: wav
+          description: Default format for completed `/generate` requests using this profile.
+        sample_rate:
+          anyOf:
+          - type: integer
+            minimum: 8000
+            maximum: 192000
+          - type: 'null'
+          default: null
+          description: Optional default output sample rate. Null lets the service choose.
+        engine_options:
+          $ref: '#/components/schemas/EngineOptions'
+      example:
+        name: default
+        description: General-purpose local speech profile
+        is_active: true
+        voice_id: en-us-lessac-medium
+        speed: 1.0
+        volume: 1.0
+        output_format: wav
+        sample_rate: null
+        engine_options: {}
+    ProfileUpdate:
+      type: object
+      minProperties: 1
+      additionalProperties: false
+      description: Partial update to a generation profile.
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          anyOf:
+          - type: string
+            maxLength: 1000
+          - type: 'null'
+        is_active:
+          type: boolean
+          description: Setting true activates this profile and deactivates all others.
+        voice_id:
+          type: string
+          minLength: 1
+        speed:
+          type: number
+          format: float
+          minimum: 0.25
+          maximum: 4.0
+        volume:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 2.0
+        output_format:
+          $ref: '#/components/schemas/AudioFormat'
+        sample_rate:
+          anyOf:
+          - type: integer
+            minimum: 8000
+            maximum: 192000
+          - type: 'null'
+        engine_options:
+          $ref: '#/components/schemas/EngineOptions'
+    ProfileRead:
+      type: object
+      required:
+      - id
+      - name
+      - is_active
+      - voice_id
+      - speed
+      - volume
+      - output_format
+      - engine_options
+      - created_at
+      - updated_at
+      properties:
+        id:
+          type: integer
+          minimum: 1
+        name:
+          type: string
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+        is_active:
+          type: boolean
+        voice_id:
+          type: string
+        speed:
+          type: number
+          format: float
+        volume:
+          type: number
+          format: float
+        output_format:
+          $ref: '#/components/schemas/AudioFormat'
+        sample_rate:
+          anyOf:
+          - type: integer
+          - type: 'null'
+        engine_options:
+          $ref: '#/components/schemas/EngineOptions'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      example:
+        id: 1
+        name: default
+        description: General-purpose local speech profile
+        is_active: true
+        voice_id: en-us-lessac-medium
+        speed: 1.0
+        volume: 1.0
+        output_format: wav
+        sample_rate: null
+        engine_options: {}
+        created_at: '2026-10-04T23:00:00Z'
+        updated_at: '2026-10-04T23:00:00Z'
+    GenerateRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - text
+      description: 'Request for completed speech audio. Any omitted generation setting is resolved
+
+        from the selected/active profile and then service defaults.
+
+        '
+      properties:
+        text:
+          type: string
+          minLength: 1
+          description: 'Plain text to speak. Long text may be internally chunked. The maximum
+
+            accepted request length is service-configurable and intentionally not fixed
+
+            by the OpenAPI schema.
+
+            '
+          example: Hello from OPAL Talk.
+        profile_id:
+          anyOf:
+          - type: integer
+            minimum: 1
+          - type: 'null'
+          description: Explicit profile to use. If omitted/null, the active profile may supply defaults.
+        voice_id:
+          anyOf:
+          - type: string
+            minLength: 1
+          - type: 'null'
+          description: Request-level voice override. Takes precedence over the profile voice.
+          example: en-us-lessac-medium
+        engine_id:
+          anyOf:
+          - type: string
+            minLength: 1
+          - type: 'null'
+          description: 'Optional advanced engine override. Normally the resolved voice selects its
+
+            registered engine. Incompatible overrides are rejected with `409 Conflict`.
+
+            '
+        speed:
+          anyOf:
+          - type: number
+            format: float
+            minimum: 0.25
+            maximum: 4.0
+          - type: 'null'
+          description: Request-level speech-rate override; `1.0` is normal speed.
+        volume:
+          anyOf:
+          - type: number
+            format: float
+            minimum: 0.0
+            maximum: 2.0
+          - type: 'null'
+          description: Request-level linear gain override; `1.0` is unchanged.
+        output_format:
+          anyOf:
+          - $ref: '#/components/schemas/AudioFormat'
+          - type: 'null'
+          description: Request-level completed-audio format override.
+        sample_rate:
+          anyOf:
+          - type: integer
+            minimum: 8000
+            maximum: 192000
+          - type: 'null'
+          description: Optional requested output sample rate in Hz.
+        engine_options:
+          $ref: '#/components/schemas/EngineOptions'
+      example:
+        text: The quick brown fox jumps over the lazy dog.
+        voice_id: en-us-lessac-medium
+        speed: 1.0
+        volume: 1.0
+        output_format: wav
+        engine_options: {}
+    GenerateStreamRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - text
+      description: 'Request for progressively streamed speech. The wire format is fixed to raw PCM,
+
+        so there is intentionally no `output_format` property.
+
+        '
+      properties:
+        text:
+          type: string
+          minLength: 1
+          description: Plain text to speak. Long text may be internally chunked.
+          example: This audio begins streaming as it is generated.
+        profile_id:
+          anyOf:
+          - type: integer
+            minimum: 1
+          - type: 'null'
+          description: Explicit profile to use; otherwise the active profile may provide defaults.
+        voice_id:
+          anyOf:
+          - type: string
+            minLength: 1
+          - type: 'null'
+          description: Request-level voice override.
+        engine_id:
+          anyOf:
+          - type: string
+            minLength: 1
+          - type: 'null'
+          description: Optional advanced engine override; incompatible overrides are rejected.
+        speed:
+          anyOf:
+          - type: number
+            format: float
+            minimum: 0.25
+            maximum: 4.0
+          - type: 'null'
+        volume:
+          anyOf:
+          - type: number
+            format: float
+            minimum: 0.0
+            maximum: 2.0
+          - type: 'null'
+        sample_rate:
+          anyOf:
+          - type: integer
+            minimum: 8000
+            maximum: 192000
+          - type: 'null'
+          description: Optional requested PCM stream sample rate in Hz.
+        engine_options:
+          $ref: '#/components/schemas/EngineOptions'
+      example:
+        text: Stream this sentence as raw PCM audio.
+        profile_id: 1
+        speed: 1.0
+        volume: 1.0
+        sample_rate: 22050
+        engine_options: {}
+    VoiceTestRequest:
+      type: object
+      additionalProperties: false
+      description: 'Parameters for generating a short completed-audio voice test. If `text` is
+
+        omitted, the implementation uses a short built-in neutral test phrase.
+
+        '
+      properties:
+        text:
+          type: string
+          minLength: 1
+          default: This is a test of the selected OPAL Talk voice.
+        speed:
+          type: number
+          format: float
+          minimum: 0.25
+          maximum: 4.0
+          default: 1.0
+        volume:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 2.0
+          default: 1.0
+        output_format:
+          allOf:
+          - $ref: '#/components/schemas/AudioFormat'
+          default: wav
+        sample_rate:
+          anyOf:
+          - type: integer
+            minimum: 8000
+            maximum: 192000
+          - type: 'null'
+          default: null
+        engine_options:
+          $ref: '#/components/schemas/EngineOptions'
+    ValidationMessage:
+      type: object
+      required:
+      - code
+      - message
+      properties:
+        code:
+          type: string
+          description: Stable machine-readable diagnostic code when possible.
+          example: model_not_found
+        message:
+          type: string
+          description: Human-readable diagnostic message.
+          example: The configured voice resource could not be resolved on this host.
+        field:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Related configuration field, when applicable.
+          example: engine_voice_ref
+        details:
+          type: object
+          additionalProperties: true
+          description: Optional implementation-specific diagnostic context.
+    ValidationResult:
+      type: object
+      required:
+      - valid
+      - errors
+      - warnings
+      - details
+      properties:
+        valid:
+          type: boolean
+          description: True when the validated object/configuration is usable under current validation rules.
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidationMessage'
+        warnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidationMessage'
+        details:
+          type: object
+          additionalProperties: true
+          description: Optional implementation-specific validation details.
+      example:
+        valid: true
+        errors: []
+        warnings: []
+        details: {}
+    SettingRead:
+      type: object
+      required:
+      - id
+      - key
+      - value
+      - updated_at
+      properties:
+        id:
+          type: integer
+        key:
+          type: string
+        value:
+          type: string
+          description: String setting value, matching the OPAL Listen setting convention.
+        updated_at:
+          type: string
+          format: date-time
+    SettingUpdate:
+      type: object
+      additionalProperties: false
+      required:
+      - value
+      properties:
+        value:
+          type: string
+          description: New string value for the setting.
+    EngineHealthRead:
+      type: object
+      required:
+      - engine_id
+      - enabled
+      - available
+      properties:
+        engine_id:
+          type: string
+        enabled:
+          type: boolean
+        available:
+          type: boolean
+        message:
+          anyOf:
+          - type: string
+          - type: 'null'
+    HealthRead:
+      type: object
+      required:
+      - status
+      - version
+      - engines
+      properties:
+        status:
+          type: string
+          enum:
+          - ok
+          - degraded
+          - error
+          description: 'Overall readiness state. `ok` means required service functions are ready;
+
+            `degraded` means the service is running but one or more configured resources
+
+            are unavailable; `error` means normal generation is not currently usable.
+
+            '
+        version:
+          type: string
+          example: 1.0.0
+        active_profile_id:
+          anyOf:
+          - type: integer
+            minimum: 1
+          - type: 'null'
+        engines:
+          type: array
+          items:
+            $ref: '#/components/schemas/EngineHealthRead'
+        details:
+          type: object
+          additionalProperties: true
+          description: Optional non-portable diagnostic information.
+      example:
+        status: ok
+        version: 1.0.0
+        active_profile_id: 1
+        engines:
+        - engine_id: piper
+          enabled: true
+          available: true
+          message: null
+        details: {}
+    BackupRead:
+      type: object
+      required:
+      - filename
+      - created_at
+      properties:
+        filename:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        size_bytes:
+          anyOf:
+          - type: integer
+            minimum: 0
+          - type: 'null'
+      example:
+        filename: opal-talk-2026-10-04T230000Z.tar.gz
+        created_at: '2026-10-04T23:00:00Z'
+        size_bytes: 18432
+    BackupCreateResponse:
+      type: object
+      required:
+      - filename
+      properties:
+        filename:
+          type: string
+        message:
+          type: string
+      example:
+        filename: opal-talk-2026-10-04T230000Z.tar.gz
+        message: Backup created successfully.
+    ConfigExport:
+      type: object
+      required:
+      - version
+      - exported_at
+      - engines
+      - voices
+      - profiles
+      - settings
+      description: 'Portable logical configuration snapshot. Engine/voice host assets are referenced,
+
+        not embedded. Consumers should tolerate future additive fields.
+
+        '
+      properties:
+        version:
+          type: string
+          description: OPAL Talk configuration schema/service version.
+          example: 1.0.0
+        exported_at:
+          type: string
+          format: date-time
+        engines:
+          type: array
+          items:
+            $ref: '#/components/schemas/EngineRead'
+        voices:
+          type: array
+          items:
+            $ref: '#/components/schemas/VoiceRead'
+        profiles:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProfileRead'
+        settings:
+          type: object
+          additionalProperties: true
+    ConfigImportResult:
+      type: object
+      required:
+      - success
+      - validation
+      properties:
+        success:
+          type: boolean
+        validation:
+          $ref: '#/components/schemas/ValidationResult'
+        message:
+          anyOf:
+          - type: string
+          - type: 'null'
+      example:
+        success: true
+        validation:
+          valid: true
+          errors: []
+          warnings: []
+          details: {}
+        message: Configuration imported successfully.
+    OperationResult:
+      type: object
+      required:
+      - success
+      - message
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+      example:
+        success: true
+        message: Backup restored successfully.
+        details: {}
+    ErrorResponse:
+      type: object
+      required:
+      - code
+      - message
+      properties:
+        code:
+          type: string
+          description: Machine-readable error code.
+          example: voice_engine_mismatch
+        message:
+          type: string
+          description: Human-readable error message.
+          example: The requested engine cannot use the resolved voice.
+        details:
+          type: object
+          additionalProperties: true
+          description: Optional structured diagnostic details.
+      example:
+        code: voice_engine_mismatch
+        message: The requested engine cannot use the resolved voice.
+        details:
+          voice_id: en-us-lessac-medium
+          requested_engine_id: kokoro
+    HTTPValidationError:
+      type: object
+      properties:
+        detail:
+          type: array
+          items:
+            $ref: '#/components/schemas/RequestValidationError'
+      description: Validation error shape compatible with the OPAL Listen/FastAPI-style contract.
+    RequestValidationError:
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      properties:
+        loc:
+          type: array
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          description: Location of the invalid request value.
+        msg:
+          type: string
+        type:
+          type: string
+        input:
+          description: Optional offending input value.
+    ServiceInfo:
+      type: object
+      required:
+      - name
+      - version
+      - api_version
+      properties:
+        name:
+          type: string
+          example: opal-talk-svc
+        version:
+          type: string
+          example: 1.0.0
+        api_version:
+          type: string
+          example: v1
+        description:
+          type: string
+          example: Implementation-neutral OPAL text-to-speech service
+    LivenessRead:
+      type: object
+      required:
+      - status
+      properties:
+        status:
+          type: string
+          enum:
+          - ok
+          example: ok
+    OpalError:
+      type: object
+      additionalProperties: false
+      required:
+      - error
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required:
+          - code
+          - message
+          - request_id
+          - transaction_id
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            details: {}
+            request_id:
+              type: string
+            transaction_id:
+              type: string
+            session_id:
+              type:
+              - string
+              - 'null'
+            causation_id:
+              type:
+              - string
+              - 'null'
+    OpalCursorPageMetadata:
+      type: object
+      required:
+      - next_cursor
+      - has_more
+      properties:
+        next_cursor:
+          type:
+          - string
+          - 'null'
+        has_more:
+          type: boolean
+    OpalHealthProbe:
+      type: object
+      required:
+      - status
+      - ready
+      properties:
+        status:
+          type: string
+          enum:
+          - ok
+          - degraded
+          - unavailable
+        ready:
+          type: boolean
+        details:
+          type: object
+          additionalProperties: true
+x-opal-context-standard:
+  version: '1.2'
+  headers:
+  - X-Opal-Session-Id
+  - X-Opal-Transaction-Id
+  - X-Opal-Request-Id
+  - X-Opal-Causation-Id
+  session_mode: context-only
+  id_format: opaque-printable-ascii-1-to-128
+  transaction_atomicity: false
+  events:
+    propagate:
+    - session_id
+    - transaction_id
+    - request_id
+    - causation_id
+    metadata_schema_version: '1.0'
+    zero_mq_frames: 2
+  pagination:
+    history: cursor
+    configuration: none
+    default_limit: 100
+    max_limit: 500
+  concurrency:
+    settings_and_config_mutations: strong-etag-if-match-required
+    missing_status: 428
+    stale_status: 412
+  streaming: Include HTTP context headers before bytes; after headers are sent, failures are represented by
+    transport-specific terminal events or stream termination; no invented resumability.

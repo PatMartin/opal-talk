@@ -1,0 +1,10 @@
+version: 1
+# Service-wide settings (string values). Known keys:
+#   max_text_chars         maximum accepted text length (413 above this)
+#   chunk_max_chars        internal text-chunk size used for synthesis/streaming
+#   default_speed          service default speed when no profile/request value applies
+#   default_volume         service default volume
+#   default_output_format  wav | pcm
+settings:
+  max_text_chars: 20000
+  chunk_max_chars: 400

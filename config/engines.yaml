@@ -1,0 +1,16 @@
+version: 1
+# Engine configuration applied by POST /api/v1/backup/import. Engines are discovered by the
+# service; this file only sets `enabled` and opaque adapter options.
+engines:
+  piper:
+    enabled: true
+    options:
+      voices_dir: ~/piper/voices
+      use_cuda: false
+      cache_size: 4
+  kokoro:
+    enabled: true
+    options:
+      model_path: ~/kokoro/kokoro-v1.0.int8.onnx
+      voices_path: ~/kokoro/voices-v1.0.bin
+      default_lang: en-us

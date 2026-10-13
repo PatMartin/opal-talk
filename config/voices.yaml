@@ -1,0 +1,24 @@
+version: 1
+# Voice registrations point at resources already installed on the host.
+# `engine_voice_ref` is opaque: a Piper model path/name, or a Kokoro voice name.
+voices:
+  - voice_id: en-us-amy-low
+    name: Amy (low)
+    engine_id: piper
+    engine_voice_ref: en_US-amy-low        # resolved against piper voices_dir
+    language: en-US
+  - voice_id: en-us-lessac-medium
+    name: Lessac (medium)
+    engine_id: piper
+    engine_voice_ref: en_US-lessac-medium
+    language: en-US
+  - voice_id: kokoro-af-heart
+    name: Kokoro Heart
+    engine_id: kokoro
+    engine_voice_ref: af_heart
+    language: en-US
+  - voice_id: kokoro-bm-george
+    name: Kokoro George (British)
+    engine_id: kokoro
+    engine_voice_ref: bm_george
+    language: en-GB

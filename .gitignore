@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+var/
+spa/node_modules/
+spa/dist/
+spa/*.tsbuildinfo
