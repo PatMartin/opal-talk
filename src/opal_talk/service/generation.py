@@ -16,6 +16,7 @@ from opal_talk.service.errors import (
     Conflict,
     GenerationFailed,
     InvalidRequest,
+    NotFound,
     PayloadTooLarge,
     Unavailable,
 )
@@ -254,3 +255,12 @@ class GenerationService:
         if plan.output_format == "wav":
             return wav_bytes(pcm, plan.sample_rate), "audio/wav"
         return pcm, "application/octet-stream"
+
+    def test_voice(self, voice_id: str, req: VoiceTestRequest) -> tuple[GenerationPlan, bytes, str]:
+        """Lookup + plan + render for POST /voices/{id}/test, in one call."""
+        voice = self.store.get_voice(voice_id)
+        if voice is None:
+            raise NotFound(f"voice '{voice_id}' not found", "voice_not_found", {"voice_id": voice_id})
+        plan = self.plan_voice_test(voice, req)
+        data, media_type = self.render(plan)
+        return plan, data, media_type

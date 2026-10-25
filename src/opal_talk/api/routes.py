@@ -133,9 +133,9 @@ def validate_voice(voice_id: str, svc: Services = Depends(services)):
 @router.post("/api/v1/voices/{voice_id}/test", tags=["voices"],
              operation_id="test_voice_api_v1_voices__voice_id__test_post", response_class=Response)
 async def test_voice(voice_id: str, body: VoiceTestRequest | None = Body(None), svc: Services = Depends(services)):
-    voice = await run_in_threadpool(svc.voices.get, voice_id)
-    plan = await run_in_threadpool(svc.generation.plan_voice_test, voice, body or VoiceTestRequest())
-    data, media_type = await run_in_threadpool(svc.generation.render, plan)
+    plan, data, media_type = await run_in_threadpool(
+        svc.generation.test_voice, voice_id, body or VoiceTestRequest()
+    )
     return Response(data, media_type=media_type, headers=plan.headers())
 
 
