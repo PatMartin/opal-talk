@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 from importlib.resources import files
 from pathlib import Path
 
@@ -11,9 +13,11 @@ from fastapi.routing import APIRoute
 
 from conftest import ContractClient, make_profile, make_voice
 from opal_talk.api.routes import router
-from opal_talk.contract import contract_operations
+from opal_talk.contract import contract_operations, load_contract
 
 ROOT = Path(__file__).resolve().parents[1]
+PACKAGED = "contract/opal_talk.yaml"
+TRACKED = "src/opal_talk/contract/opal_talk.yaml"
 
 
 def test_packaged_contract_matches_repo_root():
@@ -24,8 +28,39 @@ def test_packaged_contract_matches_repo_root():
     checkouts and in built wheels. This test is the drift guard.
     """
     assert (ROOT / "opal_talk.yaml").read_bytes() == (
-        files("opal_talk").joinpath("contract/opal_talk.yaml").read_bytes()
+        files("opal_talk").joinpath(PACKAGED).read_bytes()
     )
+
+
+def test_packaged_contract_is_a_readable_regular_file():
+    """The packaged contract must exist as a regular file, not a missing or dangling entry."""
+    resource = files("opal_talk").joinpath(PACKAGED)
+    assert resource.is_file(), f"packaged contract {PACKAGED} is missing or not a regular file"
+    assert resource.read_text(encoding="utf-8").startswith("openapi:")
+
+
+def test_load_contract_returns_valid_v1_document():
+    """load_contract() must yield a parseable OpenAPI document pinned to the implemented v1.0 API."""
+    spec = load_contract()
+    assert spec["openapi"].startswith("3.")
+    assert spec["info"]["version"] == "1.0.0", "v1.2 contract must not be packaged silently"
+    assert spec["paths"] and spec["components"]["schemas"]
+
+
+def test_git_records_contract_as_regular_file():
+    """Regression guard: Git must store the packaged contract as mode 100644.
+
+    It was once committed as a symlink (mode 120000) whose 'target' was the YAML
+    text itself, which makes `git checkout` fail on Linux CI.
+    """
+    git = shutil.which("git")
+    if git is None or not (ROOT / ".git").exists():
+        pytest.skip("git metadata not available")
+    out = subprocess.run(
+        [git, "ls-files", "-s", "--", TRACKED],
+        cwd=ROOT, capture_output=True, text=True, check=True,
+    ).stdout.split()
+    assert out and out[0] == "100644", f"{TRACKED} has git mode {out[0] if out else '<untracked>'}, expected 100644"
 
 
 def test_every_contract_operation_has_a_server_route():
