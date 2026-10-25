@@ -8,10 +8,15 @@ from typing import Any
 
 import yaml
 
+# The implemented contract is packaged as a real file (never a symlink, which breaks
+# on Windows checkouts and in wheels). Selection is explicit: only this resource is
+# loaded, so adding a newer contract file alongside it cannot change what is served.
+CONTRACT_RESOURCE = "contract/opal_talk.yaml"
+
 
 @lru_cache(maxsize=1)
 def load_contract() -> dict[str, Any]:
-    text = files("opal_talk").joinpath("contract/opal_talk.yaml").read_text(encoding="utf-8")
+    text = files("opal_talk").joinpath(CONTRACT_RESOURCE).read_text(encoding="utf-8")
     return yaml.safe_load(text)
 
 

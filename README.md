@@ -8,6 +8,16 @@ Implementation-neutral text-to-speech for the OPAL suite. The authoritative REST
 
 Interpretations of under-specified contract details are listed in [docs/CONTRACT_NOTES.md](docs/CONTRACT_NOTES.md). The [User Guide](docs/USER_GUIDE.md) covers installation, architecture, configuration, the REST API, streaming, the web GUI and integration; the complete CLI reference, with examples, is [docs/CLI.md](docs/CLI.md).
 
+## Contract files
+
+The implemented API is **v1.0.0**, kept as three byte-identical copies:
+
+- [opal_talk.yaml](opal_talk.yaml) — the authoritative, human-facing contract.
+- [opal_talk.1.0.0.yaml](opal_talk.1.0.0.yaml) — version-pinned copy of the same document.
+- `src/opal_talk/contract/opal_talk.yaml` — the packaged copy that `opal_talk.contract.load_contract()` reads and the service serves at `/openapi.json`.
+
+[opal_talk.1.2.0.yaml](opal_talk.1.2.0.yaml) is the future migration target (see [specs/opal_talk_1.2.0_migration.md](specs/opal_talk_1.2.0_migration.md)); it is never loaded, served or tested against the running service. Tests enforce that the three active copies stay identical, parse to the same `1.0.0` document and remain regular files.
+
 ## Architecture
 
 ```
