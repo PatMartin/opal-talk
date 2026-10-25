@@ -24,10 +24,10 @@ ROOT = Path(__file__).resolve().parents[1]
 # copy that the service loads and serves at /openapi.json. opal_talk.1.2.0.yaml is
 # the future migration target (specs/opal_talk_1.2.0_migration.md) and must never
 # be selected as the active contract.
-ACTIVE_VERSION = "1.0.0"
+ACTIVE_VERSION = "1.2.0"
 ROOT_CONTRACT = ROOT / "opal_talk.yaml"
 VERSIONED_CONTRACT = ROOT / f"opal_talk.{ACTIVE_VERSION}.yaml"
-FUTURE_CONTRACT = ROOT / "opal_talk.1.2.0.yaml"
+PREVIOUS_CONTRACT = ROOT / "opal_talk.1.0.0.yaml"  # superseded; must never be selected
 PACKAGED = CONTRACT_RESOURCE
 TRACKED = "src/opal_talk/contract/opal_talk.yaml"
 
@@ -57,12 +57,12 @@ def test_all_active_copies_parse_to_the_same_document():
         assert doc["info"]["version"] == ACTIVE_VERSION
 
 
-def test_future_contract_is_not_selected():
-    """The v1.2 migration document must not become the active contract silently."""
-    future = yaml.safe_load(FUTURE_CONTRACT.read_text(encoding="utf-8"))
-    assert future["info"]["version"] != ACTIVE_VERSION
-    assert FUTURE_CONTRACT.read_bytes() != ROOT_CONTRACT.read_bytes()
-    assert load_contract() != future
+def test_superseded_contract_is_not_selected():
+    """The old v1.0 document must never become the active contract again."""
+    previous = yaml.safe_load(PREVIOUS_CONTRACT.read_text(encoding="utf-8"))
+    assert previous["info"]["version"] != ACTIVE_VERSION
+    assert PREVIOUS_CONTRACT.read_bytes() != ROOT_CONTRACT.read_bytes()
+    assert load_contract() != previous
 
 
 def test_packaged_contract_is_a_readable_regular_file():
@@ -99,7 +99,7 @@ _UniqueKeyLoader.add_constructor("tag:yaml.org,2002:map", _reject_duplicate_keys
 
 def test_contracts_have_no_duplicate_yaml_keys():
     """Duplicate keys (e.g. two `paths:` entries or a repeated path) must not parse silently."""
-    for path in (ROOT_CONTRACT, VERSIONED_CONTRACT, FUTURE_CONTRACT):
+    for path in (ROOT_CONTRACT, VERSIONED_CONTRACT, PREVIOUS_CONTRACT):
         yaml.load(path.read_text(encoding="utf-8"), Loader=_UniqueKeyLoader)
 
 
@@ -231,7 +231,12 @@ def test_walkthrough_exercises_every_operation_with_conformant_responses(recordi
     assert c.put("/api/v1/settings/greeting", json={"value": "hi"}).status_code == 200
     assert c.get("/api/v1/settings/").json() == {"greeting": "hi"}
     assert c.get("/api/v1/settings/greeting").status_code == 200
-    assert c.delete("/api/v1/settings/greeting").status_code == 204
+    assert c.patch("/api/v1/settings/", json={"greeting": None, "other": "x"}).status_code == 200
+    assert c.get("/api/v1/settings/").json() == {"other": "x"}
+    assert c.delete("/api/v1/settings/other").status_code == 204
+
+    assert c.get("/api/v1/health/live").json() == {"status": "ok", "ready": True}
+    assert c.get("/api/v1/health/ready").json()["ready"] is True
 
     filename = c.post("/api/v1/backup/create").json()["filename"]
     assert c.get("/api/v1/backup/list").status_code == 200
@@ -239,6 +244,8 @@ def test_walkthrough_exercises_every_operation_with_conformant_responses(recordi
     assert c.post(f"/api/v1/backup/restore/{filename}").status_code == 200
     assert c.get("/api/v1/backup/export").status_code == 200
     assert c.get("/api/v1/backup/validate").status_code == 200
+    payload = c.get("/api/v1/backup/export").json()
+    assert c.post("/api/v1/backup/validate", json=payload).status_code == 200
     config.config_dir.mkdir(parents=True, exist_ok=True)
     (config.config_dir / "settings.yaml").write_text("version: 1\nsettings:\n  chunk_max_chars: 300\n")
     assert c.post("/api/v1/backup/import").json()["success"] is True

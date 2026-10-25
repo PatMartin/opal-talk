@@ -9,8 +9,22 @@ from opal_talk.cli.common import _call, _emit, _state
 
 def register(talk_app: typer.Typer) -> None:
     @talk_app.command("health")
-    def health(ctx: typer.Context) -> None:
+    def health(ctx: typer.Context, live: bool = typer.Option(False, "--live", help="Liveness probe."),
+               ready: bool = typer.Option(False, "--ready", help="Readiness probe.")) -> None:
         """Service readiness and engine state."""
+        if live:
+            _emit(ctx, _call(ctx, "get_talk_health_live").json())
+            return
+        if ready:
+            from opal_talk.cli.client import ApiCallError
+
+            try:
+                _emit(ctx, _call(ctx, "get_talk_health_ready").json())
+            except ApiCallError as e:
+                if e.status != 503:
+                    raise
+                _emit(ctx, e.body)
+            return
         data = _call(ctx, "health_check_api_v1_health__get").json()
         if _state(ctx).json_output:
             _emit(ctx, data)

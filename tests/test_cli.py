@@ -94,8 +94,12 @@ def test_full_cli_workflow(run, http, tmp_path, config):
     assert json.loads(run("settings list").stdout) == {"chunk_max_chars": "200"}
     assert json.loads(run("settings get chunk_max_chars").stdout)["value"] == "200"
     run("settings delete chunk_max_chars")
+    assert json.loads(run("settings patch --json '{\"greeting\": \"hi\"}'").stdout)["greeting"] == "hi"
+    run("settings patch --json '{\"greeting\": null}'")
 
     assert "status:" in run("health").stdout
+    assert json.loads(run("--json health --live").stdout)["ready"] is True
+    assert json.loads(run("--json health --ready").stdout)["ready"] is True
     assert json.loads(run("info").stdout)["name"] == "opal-talk-svc"
     assert run("ping").stdout.strip() == "ok"
 
@@ -109,6 +113,7 @@ def test_full_cli_workflow(run, http, tmp_path, config):
     run(f"backup export -o {export.as_posix()}")
     assert json.loads(export.read_text())["voices"][0]["voice_id"] == "v1"
     run("backup validate")
+    run(f"backup validate --payload {export.as_posix()}")
     config.config_dir.mkdir(parents=True, exist_ok=True)
     (config.config_dir / "settings.yaml").write_text("settings:\n  default_volume: 0.9\n")
     assert json.loads(run("backup import").stdout)["success"] is True

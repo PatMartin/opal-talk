@@ -10,13 +10,13 @@ Interpretations of under-specified contract details are listed in [docs/CONTRACT
 
 ## Contract files
 
-The implemented API is **v1.0.0**, kept as three byte-identical copies:
+The implemented API is **v1.2.0**, kept as three byte-identical copies:
 
 - [opal_talk.yaml](opal_talk.yaml) — the authoritative, human-facing contract.
-- [opal_talk.1.0.0.yaml](opal_talk.1.0.0.yaml) — version-pinned copy of the same document.
+- [opal_talk.1.2.0.yaml](opal_talk.1.2.0.yaml) — version-pinned copy of the same document.
 - `src/opal_talk/contract/opal_talk.yaml` — the packaged copy that `opal_talk.contract.load_contract()` reads and the service serves at `/openapi.json`.
 
-[opal_talk.1.2.0.yaml](opal_talk.1.2.0.yaml) is the future migration target (see [specs/opal_talk_1.2.0_migration.md](specs/opal_talk_1.2.0_migration.md)); it is never loaded, served or tested against the running service. Tests enforce that the three active copies stay identical, parse to the same `1.0.0` document and remain regular files.
+[opal_talk.1.0.0.yaml](opal_talk.1.0.0.yaml) is the superseded prior contract, kept for reference and migration history (see [specs/opal_talk_1.2.0_migration.md](specs/opal_talk_1.2.0_migration.md)); it is never loaded, served or tested against the running service. Tests enforce that the three active copies stay identical, parse to the same `1.2.0` document and remain regular files.
 
 ## Architecture
 

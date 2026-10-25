@@ -74,9 +74,14 @@ def backup_import(ctx: typer.Context) -> None:
 
 
 @backup_app.command("validate")
-def backup_validate(ctx: typer.Context) -> None:
-    """Validate the current configuration."""
-    _validation(ctx, _call(ctx, "validate_config_api_v1_backup_validate_get"))
+def backup_validate(ctx: typer.Context, payload: Path | None = typer.Option(
+    None, "--payload", help="Validate a backup/export JSON file instead of the live configuration."
+)) -> None:
+    """Validate the current configuration, or a supplied payload file."""
+    if payload is not None:
+        _validation(ctx, _call(ctx, "validate_talk_backup_payload", json=json.loads(payload.read_text(encoding="utf-8"))))
+    else:
+        _validation(ctx, _call(ctx, "validate_config_api_v1_backup_validate_get"))
 
 
 def register(talk_app: typer.Typer) -> None:

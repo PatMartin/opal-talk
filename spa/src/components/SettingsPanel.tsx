@@ -34,6 +34,24 @@ export function SettingsPanel() {
       <h2>Settings</h2>
       <p className="muted">
         Known keys: max_text_chars, chunk_max_chars, default_speed, default_volume, default_output_format. Deleting a setting restores its default.
+        <button
+          onClick={() =>
+            void action.run(async () => {
+              await call('patch_talk_settings', {
+                body: {
+                  max_text_chars: '20000',
+                  chunk_max_chars: '400',
+                  default_speed: '1',
+                  default_volume: '1',
+                  default_output_format: 'wav',
+                },
+              })
+              await settings.reload()
+            })
+          }
+        >
+          Reset to defaults
+        </button>
       </p>
       <ErrorBanner error={settings.error} />
       <table>

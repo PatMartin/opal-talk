@@ -99,7 +99,13 @@ def check_response(resp: httpx.Response, method: str | None = None, path: str | 
         if not name.startswith("X-Opal-"):
             continue
         header = _deref(header)
-        if name in required:
+        # Transaction/request IDs are always present; session/causation are
+        # context-only and required only when the request supplied them.
+        if (
+            name in required
+            or name in CORRELATION_ALWAYS
+            or (name in CORRELATION_ECHO and name.lower() in resp.request.headers)
+        ):
             assert name.lower() in resp.headers, f"{op['operationId']} missing header {name}"
         if name.lower() not in resp.headers:
             continue
@@ -110,9 +116,15 @@ def check_response(resp: httpx.Response, method: str | None = None, path: str | 
     return op
 
 
+CORRELATION_ALWAYS = {"X-Opal-Transaction-Id", "X-Opal-Request-Id"}
+CORRELATION_ECHO = {"X-Opal-Session-Id", "X-Opal-Causation-Id"}
+CORRELATION_ALL = CORRELATION_ALWAYS | CORRELATION_ECHO
+
+
 def _required_audio_headers(op: dict[str, Any], status: str) -> set[str]:
     if status != "200":
         return set()
     headers = _deref(op["responses"]["200"]).get("headers") or {}
-    # X-Opal-Profile-Id is only present when a profile participated in resolution.
-    return {h for h in headers if h.startswith("X-Opal-") and h != "X-Opal-Profile-Id"}
+    # X-Opal-Profile-Id is only present when a profile participated in resolution;
+    # correlation headers are handled separately (echo semantics).
+    return {h for h in headers if h.startswith("X-Opal-") and h not in CORRELATION_ALL | {"X-Opal-Profile-Id"}}

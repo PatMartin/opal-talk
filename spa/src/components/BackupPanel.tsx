@@ -58,6 +58,12 @@ export function BackupPanel() {
 
   const validate = () => run(async () => setValidation(await call<ValidationResult>('validate_config_api_v1_backup_validate_get')))
 
+  const validatePayload = () =>
+    run(async () => {
+      const payload = await call<Record<string, unknown>>('export_config_api_v1_backup_export_get')
+      setValidation(await call<ValidationResult>('validate_talk_backup_payload', { body: payload }))
+    })
+
   return (
     <section>
       <h2>Backup &amp; configuration</h2>
@@ -66,6 +72,7 @@ export function BackupPanel() {
         <button onClick={() => void exportConfig()}>Export JSON</button>
         <button onClick={() => void importConfig()}>Import ./config</button>
         <button onClick={() => void validate()}>Validate config</button>
+        <button onClick={() => void validatePayload()}>Validate export payload</button>
       </div>
       {message && (
         <p className="ok" role="status">

@@ -29,6 +29,7 @@ PRECONDITION_OPS = {
     "delete_profile_api_v1_profiles__profile_id__delete",
     "upsert_setting_api_v1_settings__key__put",
     "delete_setting_api_v1_settings__key__delete",
+    "patch_talk_settings",
 }
 
 

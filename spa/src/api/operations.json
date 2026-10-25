@@ -79,6 +79,10 @@
     "method": "GET",
     "path": "/api/v1/settings/"
   },
+  "patch_talk_settings": {
+    "method": "PATCH",
+    "path": "/api/v1/settings/"
+  },
   "get_setting_api_v1_settings__key__get": {
     "method": "GET",
     "path": "/api/v1/settings/{key}"
@@ -127,6 +131,10 @@
     "method": "GET",
     "path": "/api/v1/backup/validate"
   },
+  "validate_talk_backup_payload": {
+    "method": "POST",
+    "path": "/api/v1/backup/validate"
+  },
   "root__get": {
     "method": "GET",
     "path": "/"
@@ -134,5 +142,13 @@
   "healthz_healthz_get": {
     "method": "GET",
     "path": "/healthz"
+  },
+  "get_talk_health_live": {
+    "method": "GET",
+    "path": "/api/v1/health/live"
+  },
+  "get_talk_health_ready": {
+    "method": "GET",
+    "path": "/api/v1/health/ready"
   }
 }

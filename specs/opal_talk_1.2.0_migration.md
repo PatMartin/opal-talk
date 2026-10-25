@@ -1,9 +1,12 @@
 # OPAL Talk — migration to contract 1.2.0 (OPAL Suite Standard v1.2)
 
-`opal_talk.1.2.0.yaml` supersedes `opal_talk.1.0.0.yaml`. This is a **breaking** contract
-revision: the error envelope changes and mutating operations on logical configuration
-gain mandatory `If-Match` preconditions. The parity tests will flag every gap
-mechanically once the packaged contract is swapped.
+**Status: ACTIVATED.** `opal_talk.1.2.0.yaml` is now the live contract (root + packaged copies
+updated in the same commit). `opal_talk.1.0.0.yaml` is retained for reference only.
+
+This is a **breaking** contract revision relative to v1.0.0: the error envelope changed to
+`OpalError`, mutating operations on logical configuration gained mandatory `If-Match`
+preconditions, and four operations were added (`patch_talk_settings`, `get_talk_health_live`,
+`get_talk_health_ready`, `validate_talk_backup_payload`). All deltas below are implemented.
 
 ## Contract deltas (1.0.0 → 1.2.0)
 

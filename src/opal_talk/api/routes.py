@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, Header, Path, Query, Request, Response
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 
 from opal_talk import API_VERSION, SERVICE_NAME, __version__
@@ -34,6 +34,7 @@ from opal_talk.schemas import (
     VoiceUpdate,
 )
 from opal_talk.service.concurrency import config_etag, mutate_with_revision
+from opal_talk.service.config_candidate import Candidate
 from opal_talk.service.container import Services
 from opal_talk.tts.base import Report
 
@@ -107,8 +108,10 @@ def list_voices(
 
 @router.post("/api/v1/voices/", tags=["voices"], operation_id="create_voice_api_v1_voices__post",
              response_model=VoiceRead, status_code=201)
-def create_voice(body: VoiceCreate, svc: Services = Depends(services)):
-    return svc.voices.create(body)
+def create_voice(body: VoiceCreate, response: Response, svc: Services = Depends(services)):
+    voice = svc.voices.create(body)
+    response.headers["Location"] = f"/api/v1/voices/{voice['voice_id']}"
+    return voice
 
 
 @router.get("/api/v1/voices/{voice_id}", tags=["voices"], operation_id="get_voice_api_v1_voices__voice_id__get",
@@ -163,8 +166,10 @@ def list_profiles(response: Response, svc: Services = Depends(services)):
 
 @router.post("/api/v1/profiles/", tags=["profiles"], operation_id="create_profile_api_v1_profiles__post",
              response_model=ProfileRead, status_code=201)
-def create_profile(body: ProfileCreate, svc: Services = Depends(services)):
-    return svc.profiles.create(body)
+def create_profile(body: ProfileCreate, response: Response, svc: Services = Depends(services)):
+    profile = svc.profiles.create(body)
+    response.headers["Location"] = f"/api/v1/profiles/{profile['id']}"
+    return profile
 
 
 @router.get("/api/v1/profiles/{profile_id}", tags=["profiles"],
@@ -232,6 +237,12 @@ def get_all_settings(response: Response, svc: Services = Depends(services)) -> d
     return svc.settings.all()
 
 
+@router.patch("/api/v1/settings/", tags=["settings"], operation_id="patch_talk_settings")
+def patch_settings(body: dict[str, Any] = Body(min_length=1), if_match: str | None = Header(None),
+                   svc: Services = Depends(services)) -> dict[str, Any]:
+    return mutate_with_revision(svc.store, if_match, lambda: svc.settings.patch(body))
+
+
 @router.get("/api/v1/settings/{key}", tags=["settings"], operation_id="get_setting_api_v1_settings__key__get",
             response_model=SettingRead)
 def get_setting(response: Response, key: str = SettingKey, svc: Services = Depends(services)):
@@ -260,6 +271,19 @@ def delete_setting(key: str = SettingKey, if_match: str | None = Header(None), s
             response_model=HealthRead)
 def health_check(svc: Services = Depends(services)):
     return svc.health()
+
+
+@router.get("/api/v1/health/live", tags=["health"], operation_id="get_talk_health_live")
+def health_live() -> dict[str, Any]:
+    return {"status": "ok", "ready": True}
+
+
+@router.get("/api/v1/health/ready", tags=["health"], operation_id="get_talk_health_ready")
+def health_ready(svc: Services = Depends(services)):
+    health = svc.health()
+    usable = health["status"] != "error"
+    body = {"status": health["status"] if usable else "unavailable", "ready": usable, "details": health["details"]}
+    return JSONResponse(body, status_code=200 if usable else 503)
 
 
 # -- backup ----------------------------------------------------------------------
@@ -307,6 +331,20 @@ def import_config(svc: Services = Depends(services)):
             response_model=ValidationResult)
 def validate_config(svc: Services = Depends(services)):
     return report_dict(svc.config_ops.validate_current())
+
+
+@router.post("/api/v1/backup/validate", tags=["backup"], operation_id="validate_talk_backup_payload",
+             response_model=ValidationResult)
+def validate_backup_payload(body: ConfigExport, svc: Services = Depends(services)):
+    """Validate a supplied configuration payload against host resources. No writes."""
+    dump = body.model_dump(mode="json")
+    cand = Candidate(
+        engines={e["engine_id"]: {"enabled": e["enabled"], "options": e["options"]} for e in dump["engines"]},
+        voices=dump["voices"],
+        profiles=dump["profiles"],
+        settings={k: str(v) for k, v in dump["settings"].items()},
+    )
+    return report_dict(svc.config_ops.validate_candidate(cand, resources_are_errors=True)[0])
 
 
 # Registered after /backup/list etc. so the literal paths win for GET/POST.

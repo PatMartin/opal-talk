@@ -4,12 +4,24 @@ import { ErrorBanner, useLoad } from './common'
 
 export function HealthPanel() {
   const health = useLoad(() => call<Health | null>('health_check_api_v1_health__get'), null)
+  const probes = useLoad(async () => {
+    const [live, ready] = await Promise.all([
+      call<{ status: string; ready: boolean }>('get_talk_health_live'),
+      call<{ status: string; ready: boolean }>('get_talk_health_ready'),
+    ])
+    return { live, ready }
+  }, null)
   const h = health.data
   return (
     <section>
       <h2>Health</h2>
       <button onClick={() => void health.reload()}>Refresh</button>
       <ErrorBanner error={health.error} />
+      {probes.data && (
+        <p>
+          live: {probes.data.live.status} · ready: {probes.data.ready.status} ({String(probes.data.ready.ready)})
+        </p>
+      )}
       {h && (
         <>
           <p>

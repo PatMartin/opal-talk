@@ -35,5 +35,15 @@ def settings_delete(ctx: typer.Context, key: str) -> None:
     typer.echo(f"setting '{key}' deleted")
 
 
+@settings_app.command("patch")
+def settings_patch(ctx: typer.Context, payload: str = typer.Option(
+    ..., "--json", help='JSON object of changes, e.g. \'{"default_speed": 1.2}\' (null deletes a key).'
+)) -> None:
+    """Atomically merge-patch the whole settings document."""
+    import json
+
+    _emit(ctx, _call(ctx, "patch_talk_settings", json=json.loads(payload)).json())
+
+
 def register(talk_app: typer.Typer) -> None:
     talk_app.add_typer(settings_app, name="settings")
