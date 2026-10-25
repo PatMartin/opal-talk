@@ -1,19 +1,22 @@
 # OPAL Talk — migration to contract 1.2.0 (OPAL Suite Standard v1.2)
 
 `opal_talk.1.2.0.yaml` supersedes `opal_talk.1.0.0.yaml`. This is a **breaking** contract
-revision: the error envelope changes, per-key settings routes are removed, and mutating
-operations gain mandatory `If-Match` preconditions. The parity tests will flag every gap
+revision: the error envelope changes and mutating operations on logical configuration
+gain mandatory `If-Match` preconditions. The parity tests will flag every gap
 mechanically once the packaged contract is swapped.
 
 ## Contract deltas (1.0.0 → 1.2.0)
 
-### Removed operations
+### Changed operations
 
-| operationId | Routes |
-|---|---|
-| `get_setting_api_v1_settings__key__get` | `GET /api/v1/settings/{key}` |
-| `upsert_setting_api_v1_settings__key__put` | `PUT /api/v1/settings/{key}` |
-| `delete_setting_api_v1_settings__key__delete` | `DELETE /api/v1/settings/{key}` |
+No operations are removed. The per-key settings routes are **retained** for OPAL suite
+consistency, but gain the standard concurrency and error behaviour:
+
+| operationId | Route | Change |
+|---|---|---|
+| `get_setting_api_v1_settings__key__get` | `GET /api/v1/settings/{key}` | Returns `ETag`; echoes correlation headers |
+| `upsert_setting_api_v1_settings__key__put` | `PUT /api/v1/settings/{key}` | Requires `If-Match` (428 missing, 412 stale) |
+| `delete_setting_api_v1_settings__key__delete` | `DELETE /api/v1/settings/{key}` | Requires `If-Match` (428 missing, 412 stale) |
 
 ### New operations
 
@@ -36,7 +39,8 @@ mechanically once the packaged contract is swapped.
 2. **Strong ETags + mandatory `If-Match`** — `GET` on engines, voices, profiles,
    settings returns an `ETag` (a strong revision of the logical configuration).
    Mutations `PATCH /engines/{id}`, `PATCH /voices/{id}`, `DELETE /voices/{id}`,
-   `PATCH /profiles/{id}`, `DELETE /profiles/{id}`, `PATCH /settings/` require
+   `PATCH /profiles/{id}`, `DELETE /profiles/{id}`, `PATCH /settings/`,
+   `PUT /settings/{key}` and `DELETE /settings/{key}` require
    `If-Match`: missing → **428**, stale → **412**.
 3. **`201 Location`** — `POST /voices/` and `POST /profiles/` return `Location`.
 4. **New error envelope** — all service errors (including 412/428/422) use
@@ -62,7 +66,7 @@ mechanically once the packaged contract is swapped.
 2. **Config revision + ETag/If-Match**: a single `config_revision` row in the store,
    incremented inside every `transaction()` that mutates engines/voices/profiles/
    settings (backup restore/import count too). `ETag: "r<n>"` on the listed GETs; an
-   `If-Match` FastAPI dependency (`Header(...)`) on the six mutating routes raising
+   `If-Match` FastAPI dependency (`Header(...)`) on the eight mutating routes raising
    428/412. Keep it global-revision-simple — the contract asks for a revision of the
    logical configuration, not per-resource versions.
 3. **Error envelope**: replace `error_body` with the `OpalError` shape populated from
@@ -71,10 +75,11 @@ mechanically once the packaged contract is swapped.
    `InvalidRequest` folds into the same shape. Check the CLI/SPA error describers —
    they parse `code`/`detail` and must learn the new envelope.
 4. **Settings PATCH**: `SettingsService.patch(dict)` — validate known keys, apply
-   atomically in one transaction, return the full map. Remove the three `{key}`
-   routes; rework CLI to `settings get KEY`/`settings set KEY VALUE`/`settings delete
-   KEY` as read-modify-write over GET+PATCH (fetch `ETag`, send `If-Match`, retry once
-   on 412) or expose a `settings patch --json '{...}'`. SPA SettingsPanel likewise.
+   atomically in one transaction, return the full map. The three `{key}` routes stay;
+   `PUT`/`DELETE` gain the standard `If-Match` precondition, so CLI `settings set KEY
+   VALUE`/`settings delete KEY` and the SPA SettingsPanel must fetch the settings
+   `ETag` (`GET /settings/` or `GET /settings/{key}`), send `If-Match`, and retry
+   once on 412.
 5. **Health probes**: `/health/live` → `ready: true, status: ok` always (process is
    up); `/health/ready` → 200 `ready: true` when at least one enabled engine is
    available, else 503 `status: unavailable, ready: false` — reuse
@@ -102,9 +107,9 @@ mechanically once the packaged contract is swapped.
 
 ## Compatibility notes
 
-- Old clients lose `GET/PUT/DELETE /settings/{key}` — the CLI must migrate in the same
-  release. `opal talk settings get/set/delete` can keep their UX while internally
-  doing GET + If-Match PATCH.
+- `GET/PUT/DELETE /settings/{key}` are retained, so `opal talk settings get/set/delete`
+  keep their UX — but `PUT`/`DELETE` now require `If-Match`: clients fetch the current
+  `ETag`, send it, and retry once on 412.
 - The `InvalidRequest` 422 `detail` list moves under `error.details`; keep the
   `loc`/`msg`/`type`/`input` items so existing tooling still parses.
 - `If-Match` on `DELETE` is required even for deleting non-existent resources
