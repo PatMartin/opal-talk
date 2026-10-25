@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -33,8 +36,27 @@ OPAL_HEADERS = [
 ]
 
 
-def error_body(code: str, message: str, details: dict | None = None) -> dict:
-    return {"code": code, "message": message, "details": details or {}}
+def render_error(
+    request: Request,
+    status: int,
+    code: str,
+    message: str,
+    details: dict[str, Any] | None = None,
+    validation_errors: list[dict[str, Any]] | None = None,
+    headers: dict[str, str] | None = None,
+) -> JSONResponse:
+    """Every error response body is produced here — the single seam for contract revisions.
+
+    `request` is threaded through now so correlation identifiers can later be injected
+    into the body without changing call sites (contract 1.2.0's OpalError envelope).
+    `validation_errors` produces the request-validation shape (`{"detail": [...]}`);
+    `code`/`message` are unused in that shape today but will surface in OpalError.
+    """
+    if validation_errors is not None:
+        body: dict[str, Any] = {"detail": jsonable_encoder(validation_errors)}
+    else:
+        body = {"code": code, "message": message, "details": details or {}}
+    return JSONResponse(body, status_code=status, headers=headers)
 
 
 def create_app(
@@ -66,22 +88,30 @@ def create_app(
     )
 
     @app.exception_handler(ApiError)
-    async def _api_error(_request: Request, exc: ApiError):
-        return JSONResponse(error_body(exc.code, exc.message, exc.details), status_code=exc.status)
+    async def _api_error(request: Request, exc: ApiError):
+        return render_error(request, exc.status, exc.code, exc.message, exc.details)
 
     @app.exception_handler(InvalidRequest)
-    async def _invalid(_request: Request, exc: InvalidRequest):
-        return JSONResponse({"detail": exc.errors}, status_code=422)
+    async def _invalid(request: Request, exc: InvalidRequest):
+        return render_error(
+            request, 422, "unprocessable_entity", "request validation failed", validation_errors=exc.errors
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def _request_validation(request: Request, exc: RequestValidationError):
+        return render_error(
+            request, 422, "unprocessable_entity", "request validation failed", validation_errors=exc.errors()
+        )
 
     @app.exception_handler(StarletteHTTPException)
-    async def _http(_request: Request, exc: StarletteHTTPException):
+    async def _http(request: Request, exc: StarletteHTTPException):
         code = {404: "not_found", 405: "method_not_allowed"}.get(exc.status_code, "http_error")
-        return JSONResponse(error_body(code, str(exc.detail)), status_code=exc.status_code, headers=exc.headers)
+        return render_error(request, exc.status_code, code, str(exc.detail), headers=exc.headers)
 
     @app.exception_handler(Exception)
-    async def _unhandled(_request: Request, exc: Exception):
+    async def _unhandled(request: Request, exc: Exception):
         log.exception("unhandled error")
-        return JSONResponse(error_body("internal_error", "internal server error"), status_code=500)
+        return render_error(request, 500, "internal_error", "internal server error")
 
     app.include_router(router)
 
