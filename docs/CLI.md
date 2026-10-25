@@ -949,13 +949,14 @@ opal talk backup download opal-talk-2026-10-12T162205Z.tar.gz
 opal talk backup download opal-talk-2026-10-12T162205Z.tar.gz -o ~/backups/before-upgrade.tar.gz
 opal talk backup download opal-talk-2026-10-12T162205Z.tar.gz -o - | tar -xzOf - opal-talk-config.json | jq .voices
 
-# Restore a backup (no prompt, takes effect immediately)
+# Restore a backup (no prompt, takes effect immediately).
+# Replaces the whole configuration: voices/profiles/settings absent from the backup are removed.
 opal talk backup restore opal-talk-2026-10-12T162205Z.tar.gz
 ```
 ```json
 {
   "success": true,
-  "message": "Backup restored successfully.",
+  "message": "Backup restored successfully: replaced voices (4); replaced profiles (4); replaced settings (2); applied engine options (2).",
   "details": {
     "filename": "opal-talk-2026-10-12T162205Z.tar.gz",
     "warnings": [],
@@ -1014,7 +1015,10 @@ default `./config`). There is no `--from-dir` option: the files must be on the s
 | `settings.yaml` | `settings` | Map of key → value |
 
 Only the files that are present replace their section. A missing file keeps that section unchanged.
-Everything is validated before anything is applied.
+"Replace" means delete and re-create: voices, profiles and settings that exist now but are absent from
+the YAML are removed (later requests for them fail `404`), so run `backup create` first. Engine entries
+only merge `enabled`/`options`. Everything is validated before anything is applied, and the result
+`message` says exactly what was replaced.
 
 ```bash
 opal talk backup import

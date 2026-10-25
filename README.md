@@ -62,7 +62,7 @@ opal talk generate "Streamed speech." --stream -o - | aplay -r 22050 -f S16_LE -
 opal talk backup create
 ```
 
-`opal-talk …` is equivalent to `opal talk …`. Add `--json` for raw responses; `-O key=value` / `--options-json` pass `engine_options`.
+`opal-talk …` is equivalent to `opal talk …`. Global options go before the command group — `opal-talk --json voices list` prints raw JSON; `-O key=value` / `--options-json` pass `engine_options`.
 
 ## Development
 

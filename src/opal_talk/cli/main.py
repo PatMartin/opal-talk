@@ -64,6 +64,8 @@ def client_factory(api_url: str, timeout: float) -> ApiClient:
 
 talk_app = typer.Typer(
     help="OPAL Talk text-to-speech (talks to the opal-talk-svc REST API).",
+    epilog="Global options (--api-url, --json, --timeout) go before the command group, "
+           "e.g. 'opal talk --json voices list'.",
     no_args_is_help=True,
     pretty_exceptions_enable=False,
 )

@@ -1282,13 +1282,15 @@ curl -s -OJ $API/api/v1/backup/download/opal-talk-2026-10-12T162205Z.tar.gz
 1. Reads the archive and checks its JSON against the export schema (`409 invalid_backup` if unreadable).
 2. Validates the whole configuration. Unresolvable voice resources are warnings; errors give
    `409 backup_invalid` with `details.errors`, and nothing is changed.
-3. Replaces engines, voices, profiles (ids kept) and settings in one transaction.
+3. Replaces voices, profiles (ids kept) and settings, and applies engine `enabled`/`options`, in one
+   transaction. **Replaced means deleted and re-created:** voices, profiles and settings that exist now
+   but are absent from the backup are removed.
 
 ```bash
 curl -s -X POST $API/api/v1/backup/restore/opal-talk-2026-10-12T162205Z.tar.gz
 ```
 ```json
-{"success": true, "message": "Backup restored successfully.",
+{"success": true, "message": "Backup restored successfully: replaced voices (4); replaced profiles (4); replaced settings (2); applied engine options (2).",
  "details": {"filename": "opal-talk-2026-10-12T162205Z.tar.gz", "warnings": [],
              "engines": 2, "voices": 4, "profiles": 4, "settings": 2}}
 ```
@@ -1320,7 +1322,11 @@ curl -s $API/api/v1/backup/export | jq 'keys'
 
 There's no request body. The service reads `engines.yaml`, `voices.yaml`, `profiles.yaml` and
 `settings.yaml` from its `config_dir` (see [4.2](#42-import-files-configyaml)). Sections for files that
-are present are validated together and then replaced in one transaction.
+are present are validated together and then replaced in one transaction. **Replaced means deleted and
+re-created:** a voice, profile or setting that exists now but is absent from the file is removed (a
+resource that disappears can make later requests fail with `404`/`409 not_found`); engine entries are
+merged instead — they only set `enabled`/`options` for installed engines. The response `message` lists
+what was replaced.
 
 ```bash
 curl -s -X POST $API/api/v1/backup/import
@@ -1330,7 +1336,7 @@ curl -s -X POST $API/api/v1/backup/import
  "validation": {"valid": true, "errors": [], "warnings": [],
                 "details": {"engines": 2, "voices": 4, "profiles": 3, "settings": 2,
                             "files": ["engines.yaml", "voices.yaml", "profiles.yaml", "settings.yaml"]}},
- "message": "Configuration imported successfully."}
+ "message": "Configuration imported successfully: replaced voices (4); replaced profiles (3); replaced settings (2); applied engine options (2)."}
 ```
 
 | Outcome | Response |

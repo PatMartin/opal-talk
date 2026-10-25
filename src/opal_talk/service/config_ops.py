@@ -41,6 +41,17 @@ class Candidate:
     settings: dict[str, str] | None = None
 
 
+def _apply_summary(cand: Candidate) -> str:
+    """Human-readable summary of what applying `cand` does to existing state."""
+    parts = []
+    for name, section in (("voices", cand.voices), ("profiles", cand.profiles), ("settings", cand.settings)):
+        if section is not None:
+            parts.append(f"replaced {name} ({len(section)})")
+    if cand.engines is not None:
+        parts.append(f"applied engine options ({len(cand.engines)})")
+    return "; ".join(parts)
+
+
 def _settings_to_str(raw: dict[str, Any]) -> dict[str, str]:
     out: dict[str, str] = {}
     for key, value in raw.items():
@@ -326,7 +337,11 @@ class ConfigService:
             self._apply(cand, descriptions)
         except Exception as exc:  # noqa: BLE001
             raise OperationFailed(f"failed to apply configuration: {exc}", "import_failed") from exc
-        return {"success": True, "validation": report, "message": "Configuration imported successfully."}
+        return {
+            "success": True,
+            "validation": report,
+            "message": f"Configuration imported successfully: {_apply_summary(cand)}.",
+        }
 
     # -- backups ----------------------------------------------------------------
 
@@ -409,7 +424,7 @@ class ConfigService:
             raise OperationFailed(f"failed to restore backup: {exc}", "restore_failed") from exc
         return {
             "success": True,
-            "message": "Backup restored successfully.",
+            "message": f"Backup restored successfully: {_apply_summary(cand)}.",
             "details": {
                 "filename": filename,
                 "warnings": [{"code": i.code, "message": i.message, "field": i.field} for i in report.warnings],
