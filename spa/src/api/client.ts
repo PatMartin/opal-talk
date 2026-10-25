@@ -9,6 +9,18 @@ export interface ErrorResponse {
   details?: Record<string, unknown>
 }
 
+/** Shared OPAL error envelope body (`{"error": OpalError}`), contract 1.2.0. */
+export interface OpalError extends ErrorResponse {
+  request_id: string
+  transaction_id: string
+  session_id?: string | null
+  causation_id?: string | null
+}
+
+export interface OpalErrorEnvelope {
+  error: OpalError
+}
+
 export interface FieldError {
   loc: (string | number)[]
   msg: string
@@ -26,9 +38,12 @@ export class ApiError extends Error {
 
 function describe(status: number, body: unknown): string {
   if (body && typeof body === 'object') {
-    const b = body as Partial<ErrorResponse> & { detail?: FieldError[] | string }
-    if (b.code) return `${status} ${b.code}: ${b.message ?? ''}`
-    if (Array.isArray(b.detail)) return `${status} validation error: ` + b.detail.map((d) => `${d.loc.join('.')}: ${d.msg}`).join('; ')
+    const raw = body as Record<string, unknown>
+    const err = raw.error && typeof raw.error === 'object' ? (raw.error as Record<string, unknown>) : raw
+    const details = err.details as { errors?: FieldError[] } | undefined
+    const fieldErrors = Array.isArray(details?.errors) ? details.errors : Array.isArray(err.detail) ? (err.detail as FieldError[]) : null
+    if (fieldErrors) return `${status} validation error: ` + fieldErrors.map((d) => `${d.loc.join('.')}: ${d.msg}`).join('; ')
+    if (typeof err.code === 'string') return `${status} ${err.code}: ${typeof err.message === 'string' ? err.message : ''}`
   }
   return `${status}: ${typeof body === 'string' ? body : JSON.stringify(body)}`
 }

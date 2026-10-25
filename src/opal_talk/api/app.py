@@ -15,7 +15,12 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from opal_talk import SERVICE_NAME, __version__
-from opal_talk.api.correlation import CORRELATION_HEADERS, CorrelationMiddleware
+from opal_talk.api.correlation import (
+    CORRELATION_HEADERS,
+    CorrelationMiddleware,
+    correlation_ids,
+    opal_error_body,
+)
 from opal_talk.api.routes import router
 from opal_talk.config import ServiceConfig, load_config
 from opal_talk.contract import load_contract
@@ -47,17 +52,16 @@ def render_error(
     validation_errors: list[dict[str, Any]] | None = None,
     headers: dict[str, str] | None = None,
 ) -> JSONResponse:
-    """Every error response body is produced here — the single seam for contract revisions.
+    """Every error response body is produced here, in the contract-1.2 OpalError envelope.
 
-    `request` is threaded through now so correlation identifiers can later be injected
-    into the body without changing call sites (contract 1.2.0's OpalError envelope).
-    `validation_errors` produces the request-validation shape (`{"detail": [...]}`);
-    `code`/`message` are unused in that shape today but will surface in OpalError.
+    `validation_errors` (Pydantic `RequestValidationError` items or `InvalidRequest`
+    issue lists) land under `error.details.errors`, keeping `loc`/`msg`/`type`/`input`
+    fields so existing tooling still parses them.
     """
+    det = dict(details or {})
     if validation_errors is not None:
-        body: dict[str, Any] = {"detail": jsonable_encoder(validation_errors)}
-    else:
-        body = {"code": code, "message": message, "details": details or {}}
+        det["errors"] = jsonable_encoder(validation_errors)
+    body = opal_error_body(code, message, det, correlation_ids(request))
     return JSONResponse(body, status_code=status, headers=headers)
 
 

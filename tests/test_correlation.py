@@ -63,7 +63,7 @@ def test_invalid_identifiers_are_rejected_with_422(client, bad):
     for name in CORRELATION_HEADERS:
         resp = client.get("/healthz", headers={name: bad})
         assert resp.status_code == 422, (name, bad, resp.text)
-        assert resp.json()["detail"], resp.text
+        assert resp.json()["error"]["details"]["errors"], resp.text
         # Correlation headers are stamped even on the rejection, but an invalid
         # client value is never echoed back.
         assert re.fullmatch(r"[!-~]{1,128}", resp.headers["X-Opal-Transaction-Id"])
@@ -75,7 +75,7 @@ def test_every_invalid_identifier_is_reported(client):
     client.skip_contract = True
     resp = client.get("/healthz", headers={"X-Opal-Session-Id": "bad id", "X-Opal-Request-Id": "also bad"})
     assert resp.status_code == 422
-    locs = {tuple(e["loc"]) for e in resp.json()["detail"]}
+    locs = {tuple(e["loc"]) for e in resp.json()["error"]["details"]["errors"]}
     assert locs == {("header", "X-Opal-Session-Id"), ("header", "X-Opal-Request-Id")}
 
 

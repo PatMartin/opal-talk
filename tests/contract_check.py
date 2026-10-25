@@ -13,6 +13,26 @@ from opal_talk.contract import load_contract
 SPEC = load_contract()
 METHODS = ("get", "put", "post", "patch", "delete")
 
+# Transitional: service errors already emit the contract-1.2 `OpalError` envelope
+# while the published contract is still v1.0, so error bodies are validated against
+# this shape rather than the v1.0 error schemas they will replace.
+OPAL_ERROR_SCHEMA = {
+    "type": "object",
+    "required": ["error"],
+    "properties": {
+        "error": {
+            "type": "object",
+            "required": ["code", "message", "request_id", "transaction_id"],
+            "properties": {
+                "code": {"type": "string"},
+                "message": {"type": "string"},
+                "request_id": {"type": "string"},
+                "transaction_id": {"type": "string"},
+            },
+        }
+    },
+}
+
 
 def _route_regex(template: str) -> re.Pattern[str]:
     return re.compile("^" + re.sub(r"\{[^/]+\}", "[^/]+", template) + "$")
@@ -70,7 +90,10 @@ def check_response(resp: httpx.Response, method: str | None = None, path: str | 
     media = resp.headers.get("content-type", "").split(";")[0].strip()
     assert media in content, f"{op['operationId']} {status} returned media type {media}, expected {list(content)}"
     if media == "application/json":
-        schema_validator(content[media]["schema"]).validate(resp.json())
+        if resp.status_code >= 400:
+            Draft202012Validator(OPAL_ERROR_SCHEMA).validate(resp.json())
+        else:
+            schema_validator(content[media]["schema"]).validate(resp.json())
     required = _required_audio_headers(op, status)
     for name, header in (spec_resp.get("headers") or {}).items():
         if not name.startswith("X-Opal-"):

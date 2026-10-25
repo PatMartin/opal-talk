@@ -112,13 +112,14 @@ def test_engine_override(client, setup, engines):
 def test_engine_override_mismatch(client, setup):
     resp = client.post("/api/v1/generate", json={"text": "x", "voice_id": "v2", "engine_id": "alt"})
     assert resp.status_code == 409
-    assert resp.json() == {
-        "code": "voice_engine_mismatch",
-        "message": "The requested engine cannot use the resolved voice.",
-        "details": {"voice_id": "v2", "requested_engine_id": "alt"},
-    }
+    err = resp.json()["error"]
+    assert (err["code"], err["message"], err["details"]) == (
+        "voice_engine_mismatch",
+        "The requested engine cannot use the resolved voice.",
+        {"voice_id": "v2", "requested_engine_id": "alt"},
+    )
     resp = client.post("/api/v1/generate", json={"text": "x", "voice_id": "v1", "engine_id": "ghost"})
-    assert resp.status_code == 409 and resp.json()["code"] == "engine_not_found"
+    assert resp.status_code == 409 and resp.json()["error"]["code"] == "engine_not_found"
 
 
 @pytest.mark.parametrize(
@@ -132,26 +133,26 @@ def test_engine_override_mismatch(client, setup):
 )
 def test_conflicts(client, setup, body, status, code):
     resp = client.post("/api/v1/generate", json=body)
-    assert resp.status_code == status and resp.json()["code"] == code
+    assert resp.status_code == status and resp.json()["error"]["code"] == code
 
 
 def test_disabled_voice_and_engine(client, setup):
     client.patch("/api/v1/voices/v2", json={"enabled": False})
-    assert client.post("/api/v1/generate", json={"text": "x", "voice_id": "v2"}).json()["code"] == "voice_disabled"
+    assert client.post("/api/v1/generate", json={"text": "x", "voice_id": "v2"}).json()["error"]["code"] == "voice_disabled"
     client.patch("/api/v1/engines/fake", json={"enabled": False})
-    assert client.post("/api/v1/generate", json={"text": "x", "voice_id": "v1"}).json()["code"] == "engine_disabled"
+    assert client.post("/api/v1/generate", json={"text": "x", "voice_id": "v1"}).json()["error"]["code"] == "engine_disabled"
 
 
 def test_unavailable_engine_is_503(client, setup):
     client.patch("/api/v1/engines/fake", json={"options": {"available": False}})
     resp = client.post("/api/v1/generate", json={"text": "x", "voice_id": "v1"})
-    assert resp.status_code == 503 and resp.json()["code"] == "engine_unavailable"
+    assert resp.status_code == 503 and resp.json()["error"]["code"] == "engine_unavailable"
 
 
 def test_payload_too_large(client, setup):
     client.put("/api/v1/settings/max_text_chars", json={"value": "10"})
     resp = client.post("/api/v1/generate", json={"text": "x" * 11, "voice_id": "v1"})
-    assert resp.status_code == 413 and resp.json()["details"]["max_text_chars"] == 10
+    assert resp.status_code == 413 and resp.json()["error"]["details"]["max_text_chars"] == 10
 
 
 @pytest.mark.parametrize(
@@ -175,12 +176,12 @@ def test_payload_too_large(client, setup):
 def test_validation_errors(client, setup, body):
     resp = client.post("/api/v1/generate", json=body)
     assert resp.status_code == 422, resp.text
-    assert isinstance(resp.json()["detail"], list)
+    assert isinstance(resp.json()["error"]["details"]["errors"], list)
 
 
 def test_generation_failure_is_500(client, setup):
     resp = client.post("/api/v1/generate", json={"text": "x", "voice_id": "v1", "engine_options": {"fail_on_call": 1}})
-    assert resp.status_code == 500 and resp.json()["code"] == "generation_failed"
+    assert resp.status_code == 500 and resp.json()["error"]["code"] == "generation_failed"
 
 
 def test_voice_test_endpoint(client, setup):

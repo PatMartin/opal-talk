@@ -90,7 +90,7 @@ def test_corrupt_backup_restore_is_conflict_and_changes_nothing(client, populate
     config.backup_dir.mkdir(parents=True, exist_ok=True)
     bad.write_bytes(b"not a tarball")
     resp = client.post(f"/api/v1/backup/restore/{bad.name}")
-    assert resp.status_code == 409 and resp.json()["code"] == "invalid_backup"
+    assert resp.status_code == 409 and resp.json()["error"]["code"] == "invalid_backup"
     assert client.get("/api/v1/backup/export").json()["voices"] == before["voices"]
 
 
@@ -106,7 +106,7 @@ def test_invalid_backup_content_is_rejected_atomically(client, populated, config
         tar.addfile(info, io.BytesIO(payload))
     client.post("/api/v1/profiles/", json={"name": "keep-me", "voice_id": "v2"})
     resp = client.post(f"/api/v1/backup/restore/{path.name}")
-    assert resp.status_code == 409 and resp.json()["code"] == "backup_invalid"
+    assert resp.status_code == 409 and resp.json()["error"]["code"] == "backup_invalid"
     assert "keep-me" in [p["name"] for p in client.get("/api/v1/profiles/").json()]
 
 
@@ -172,7 +172,7 @@ def test_invalid_import_applies_nothing(client, config, populated, files, code):
 
 def test_import_without_config_files_is_conflict(client):
     resp = client.post("/api/v1/backup/import")
-    assert resp.status_code == 409 and resp.json()["code"] == "config_not_found"
+    assert resp.status_code == 409 and resp.json()["error"]["code"] == "config_not_found"
 
 
 def test_import_unresolvable_resource_is_warning(client, config):

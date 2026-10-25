@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 import uuid
 from dataclasses import dataclass
+from typing import Any
 
 from starlette.datastructures import MutableHeaders
 from starlette.requests import Request
@@ -49,9 +50,34 @@ class CorrelationIds:
         return headers
 
 
-def correlation_ids(request: Request) -> CorrelationIds:
+def correlation_ids(request: Request) -> CorrelationIds | None:
     """Return the identifiers of the in-flight request (set by CorrelationMiddleware)."""
-    return getattr(request.state, _STATE_KEY)
+    return getattr(request.state, _STATE_KEY, None)
+
+
+def opal_error_body(
+    code: str,
+    message: str,
+    details: dict[str, Any] | None = None,
+    ids: CorrelationIds | None = None,
+) -> dict[str, Any]:
+    """Serialize an error in the shared `OpalError` envelope (contract 1.2.0).
+
+    `request_id`/`transaction_id` are required by the schema; they come from the
+    request's CorrelationIds when available and are generated otherwise.
+    """
+    error: dict[str, Any] = {
+        "code": code,
+        "message": message,
+        "request_id": ids.request_id if ids else uuid.uuid4().hex,
+        "transaction_id": ids.transaction_id if ids else uuid.uuid4().hex,
+        "details": details or {},
+    }
+    if ids and ids.session_id is not None:
+        error["session_id"] = ids.session_id
+    if ids and ids.causation_id is not None:
+        error["causation_id"] = ids.causation_id
+    return {"error": error}
 
 
 class CorrelationMiddleware:
@@ -103,6 +129,9 @@ class CorrelationMiddleware:
             await send(message)
 
         if errors:
-            await JSONResponse({"detail": errors}, status_code=422)(scope, receive, send_with_ids)
+            body = opal_error_body(
+                "unprocessable_entity", "request validation failed", {"errors": errors}, ids=ids
+            )
+            await JSONResponse(body, status_code=422)(scope, receive, send_with_ids)
             return
         await self.app(scope, receive, send_with_ids)

@@ -218,5 +218,5 @@ def test_rest_to_kokoro_end_to_end(tmp_path):
         check_response(resp)
         assert resp.headers["x-opal-sample-rate"] == "16000" and len(resp.content) > 16000 * 2 * 0.2
         resp = c.post("/api/v1/generate", json={"text": "Hi.", "voice_id": "k", "speed": 3.0})
-        assert resp.status_code == 409 and resp.json()["code"] == "unsupported_speed"
+        assert resp.status_code == 409 and resp.json()["error"]["code"] == "unsupported_speed"
     app.state.services.close()

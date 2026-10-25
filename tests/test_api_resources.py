@@ -40,7 +40,7 @@ class TestEngines:
     def test_update_rejects_invalid_options(self, client):
         resp = client.patch("/api/v1/engines/fake", json={"options": {"nope": 1, "available": "yes"}})
         assert resp.status_code == 422
-        locs = [d["loc"] for d in resp.json()["detail"]]
+        locs = [d["loc"] for d in resp.json()["error"]["details"]["errors"]]
         assert ["body", "options", "nope"] in locs and ["body", "options", "available"] in locs
 
     def test_update_validation(self, client):
@@ -84,10 +84,10 @@ class TestVoices:
         assert client.post("/api/v1/voices/", json={**base, "voice_id": "v9", "extra": 1}).status_code == 422
         resp = client.post("/api/v1/voices/", json={**base, "voice_id": "v9", "engine_voice_ref": "missing"})
         assert resp.status_code == 422
-        assert resp.json()["detail"][0]["loc"] == ["body", "engine_voice_ref"]
+        assert resp.json()["error"]["details"]["errors"][0]["loc"] == ["body", "engine_voice_ref"]
         resp = client.post("/api/v1/voices/", json={**base, "voice_id": "v9", "engine_options": {"x": 1}})
         assert resp.status_code == 422
-        assert resp.json()["detail"][0]["loc"] == ["body", "engine_options", "x"]
+        assert resp.json()["error"]["details"]["errors"][0]["loc"] == ["body", "engine_options", "x"]
 
     def test_register_when_engine_unavailable_defers_resolution(self, client):
         client.patch("/api/v1/engines/fake", json={"options": {"available": False}})
@@ -114,13 +114,13 @@ class TestVoices:
         make_voice(client, "v1")
         make_profile(client, "p", "v1", is_active=True, engine_options={"pitch": 100})
         resp = client.patch("/api/v1/voices/v1", json={"enabled": False})
-        assert resp.status_code == 409 and resp.json()["code"] == "voice_in_use"
+        assert resp.status_code == 409 and resp.json()["error"]["code"] == "voice_in_use"
 
     def test_delete(self, client):
         make_voice(client, "v1")
         p = make_profile(client, "p", "v1")
         resp = client.delete("/api/v1/voices/v1")
-        assert resp.status_code == 409 and resp.json()["details"]["profile_ids"] == [p["id"]]
+        assert resp.status_code == 409 and resp.json()["error"]["details"]["profile_ids"] == [p["id"]]
         client.delete(f"/api/v1/profiles/{p['id']}")
         assert client.delete("/api/v1/voices/v1").status_code == 204
         assert client.get("/api/v1/voices/v1").status_code == 404
@@ -166,10 +166,10 @@ class TestProfiles:
         resp = client.post("/api/v1/profiles/", json={"name": "x", "voice_id": "v1", "engine_options": {"q": 1}})
         assert resp.status_code == 422
         resp = client.post("/api/v1/profiles/", json={"name": "x", "voice_id": "v2", "is_active": True})
-        assert resp.status_code == 409 and resp.json()["code"] == "voice_disabled"
+        assert resp.status_code == 409 and resp.json()["error"]["code"] == "voice_disabled"
         p2 = make_profile(client, "p2", "v2")
         assert client.post(f"/api/v1/profiles/{p2['id']}/activate").status_code == 409
-        assert client.delete(f"/api/v1/profiles/{p1['id']}").json()["code"] == "profile_active"
+        assert client.delete(f"/api/v1/profiles/{p1['id']}").json()["error"]["code"] == "profile_active"
         assert client.patch(f"/api/v1/profiles/{p2['id']}", json={"name": "p1"}).status_code == 409
         assert client.patch(f"/api/v1/profiles/{p2['id']}", json={"voice_id": "zz"}).status_code == 404
         assert client.patch(f"/api/v1/profiles/{p2['id']}", json={}).status_code == 422
@@ -184,9 +184,9 @@ class TestProfiles:
         p = make_profile(client, "p1", "v1")
         client.patch("/api/v1/engines/fake", json={"enabled": False})
         resp = client.post(f"/api/v1/profiles/{p['id']}/activate")
-        assert resp.status_code == 409 and resp.json()["code"] == "engine_disabled"
+        assert resp.status_code == 409 and resp.json()["error"]["code"] == "engine_disabled"
         client.patch("/api/v1/engines/fake", json={"enabled": True, "options": {"available": False}})
-        assert client.post(f"/api/v1/profiles/{p['id']}/activate").json()["code"] == "engine_unavailable"
+        assert client.post(f"/api/v1/profiles/{p['id']}/activate").json()["error"]["code"] == "engine_unavailable"
 
 
 class TestSettings:
@@ -221,4 +221,4 @@ class TestHealth:
 
     def test_unknown_route_uses_error_shape(self, client):
         resp = client.get("/api/v1/nothing")
-        assert resp.status_code == 404 and resp.json()["code"] == "not_found"
+        assert resp.status_code == 404 and resp.json()["error"]["code"] == "not_found"

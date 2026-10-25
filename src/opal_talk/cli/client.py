@@ -31,11 +31,16 @@ class ApiCallError(Exception):
 
     def describe(self) -> str:
         body = self.body
-        if isinstance(body, dict) and "code" in body:
-            return f"HTTP {self.status} {body['code']}: {body.get('message', '')}"
-        if isinstance(body, dict) and isinstance(body.get("detail"), list):
-            parts = [f"{'.'.join(map(str, d.get('loc', [])))}: {d.get('msg')}" for d in body["detail"]]
-            return f"HTTP {self.status} validation error: " + "; ".join(parts)
+        if isinstance(body, dict):
+            # OpalError envelope ({"error": {...}}); fall back to the bare v1.0 shapes.
+            err = body["error"] if isinstance(body.get("error"), dict) else body
+            details = err.get("details") if isinstance(err.get("details"), dict) else {}
+            field_errors = details.get("errors") if isinstance(details.get("errors"), list) else err.get("detail")
+            if isinstance(field_errors, list):
+                parts = [f"{'.'.join(map(str, e.get('loc', [])))}: {e.get('msg')}" for e in field_errors]
+                return f"HTTP {self.status} validation error: " + "; ".join(parts)
+            if "code" in err:
+                return f"HTTP {self.status} {err['code']}: {err.get('message', '')}"
         return f"HTTP {self.status}: {body}"
 
 
