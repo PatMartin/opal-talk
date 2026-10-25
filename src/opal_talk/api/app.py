@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from opal_talk import SERVICE_NAME, __version__
+from opal_talk.api.correlation import CORRELATION_HEADERS, CorrelationMiddleware
 from opal_talk.api.routes import router
 from opal_talk.config import ServiceConfig, load_config
 from opal_talk.contract import load_contract
@@ -32,6 +33,7 @@ OPAL_HEADERS = [
     "X-Opal-Engine-Id",
     "X-Opal-Voice-Id",
     "X-Opal-Profile-Id",
+    *CORRELATION_HEADERS,
     "Content-Disposition",
 ]
 
@@ -86,6 +88,9 @@ def create_app(
         allow_headers=["*"],
         expose_headers=OPAL_HEADERS,
     )
+    # Outermost middleware: stamps/validates correlation IDs on every response,
+    # including streamed, binary and error responses.
+    app.add_middleware(CorrelationMiddleware)
 
     @app.exception_handler(ApiError)
     async def _api_error(request: Request, exc: ApiError):
