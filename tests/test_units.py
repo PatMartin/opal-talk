@@ -139,3 +139,45 @@ class TestConfigRevision:
         store = Store(db)
         assert store.config_revision() == 1
         store.close()
+
+
+class TestSettingsPatch:
+    @pytest.fixture
+    def svc(self, tmp_path):
+        from opal_talk.service.settings import SettingsService
+        return SettingsService(Store(tmp_path / "db.sqlite"))
+
+    def test_patch_sets_and_returns_full_map(self, svc):
+        out = svc.patch({"chunk_max_chars": "200", "custom": "x"})
+        assert out == {"chunk_max_chars": "200", "custom": "x"}
+        assert svc.all() == out
+
+    def test_null_deletes(self, svc):
+        svc.patch({"chunk_max_chars": "200", "other": "1"})
+        assert svc.patch({"chunk_max_chars": None}) == {"other": "1"}
+
+    def test_values_normalized_to_strings(self, svc):
+        assert svc.patch({"chunk_max_chars": 200, "flag": True}) == {"chunk_max_chars": "200", "flag": "true"}
+
+    def test_known_key_validated_and_atomic(self, svc):
+        svc.patch({"chunk_max_chars": "300"})
+        with pytest.raises(Exception) as exc_info:
+            svc.patch({"chunk_max_chars": "not-a-number", "good": "1"})
+        assert "must be" in str(exc_info.value)
+        # the valid key in the same patch must not have been applied either
+        assert svc.all() == {"chunk_max_chars": "300"}
+
+    def test_multiple_errors_reported(self, svc):
+        with pytest.raises(Exception) as exc_info:
+            svc.patch({"chunk_max_chars": "x", "default_speed": "y"})
+        assert len(exc_info.value.errors) == 2
+
+    def test_patch_bumps_revision_once(self, svc, tmp_path):
+        before = svc.store.config_revision()
+        svc.patch({"a": "1", "b": "2", "c": "3"})
+        assert svc.store.config_revision() == before + 1
+
+    def test_effective_unaffected(self, svc):
+        svc.patch({"default_speed": "1.5"})
+        assert svc.effective("default_speed") == 1.5
+        assert svc.effective("default_volume") == 1.0  # built-in default

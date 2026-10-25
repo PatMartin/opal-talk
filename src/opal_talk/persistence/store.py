@@ -239,6 +239,21 @@ class Store:
         with self.transaction() as conn:
             conn.execute("DELETE FROM settings WHERE key = ?", (key,))
 
+    def patch_settings(self, changes: dict[str, str | None]) -> None:
+        """Merge-patch settings atomically: non-null values upserted, `null` deletes."""
+        stamp = now_iso()
+        with self.transaction() as conn:
+            for key, value in changes.items():
+                if value is None:
+                    conn.execute("DELETE FROM settings WHERE key = ?", (key,))
+                else:
+                    conn.execute(
+                        "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) "
+                        "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
+                        "updated_at = excluded.updated_at",
+                        (key, value, stamp),
+                    )
+
     # -- bulk replace (import/restore) -----------------------------------------
 
     def replace_all(

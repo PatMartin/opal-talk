@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from typing import Any
 
@@ -41,6 +42,21 @@ KNOWN_SETTINGS: dict[str, tuple[Callable[[str], Any], Any]] = {
 }
 
 
+def settings_to_str(raw: dict[str, Any]) -> dict[str, str]:
+    """Normalize setting values to storage strings (shared by PATCH, YAML import and restore)."""
+    out: dict[str, str] = {}
+    for key, value in raw.items():
+        if isinstance(value, bool):
+            out[str(key)] = "true" if value else "false"
+        elif value is None:
+            out[str(key)] = ""
+        elif isinstance(value, dict | list):
+            out[str(key)] = json.dumps(value)
+        else:
+            out[str(key)] = str(value)
+    return out
+
+
 def setting_problem(key: str, value: str) -> str | None:
     if key not in KNOWN_SETTINGS:
         return None
@@ -73,6 +89,34 @@ class SettingsService:
     def delete(self, key: str) -> None:
         self.get(key)
         self.store.delete_setting(key)
+
+    def patch(self, changes: dict[str, Any]) -> dict[str, str]:
+        """Merge-patch the whole settings document: non-null values set, `null` deletes.
+
+        Values are normalized to strings (same rules as YAML import); known keys are
+        validated. Every change is checked first, then applied in one transaction —
+        all or nothing — and the full resulting map is returned. Contract 1.2.0's
+        `PATCH /api/v1/settings/` sits directly on top of this.
+        """
+        normalized: dict[str, str | None] = {}
+        errors: list[dict[str, Any]] = []
+        for key, value in changes.items():
+            if value is None:
+                normalized[str(key)] = None
+                continue
+            text = settings_to_str({key: value})[key]
+            problem = setting_problem(str(key), text)
+            if problem:
+                errors.append(
+                    {"loc": ["body", str(key)], "msg": f"setting '{key}' {problem}",
+                     "type": "value_error", "input": value}
+                )
+            else:
+                normalized[str(key)] = text
+        if errors:
+            raise InvalidRequest(errors)
+        self.store.patch_settings(normalized)
+        return self.all()
 
     def effective(self, key: str) -> Any:
         parser, default = KNOWN_SETTINGS[key]

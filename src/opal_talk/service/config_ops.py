@@ -23,7 +23,7 @@ from opal_talk.persistence.store import Store, now_iso
 from opal_talk.schemas import ConfigExport, ProfileCreate, VoiceCreate
 from opal_talk.service.catalog import EngineService
 from opal_talk.service.errors import Conflict, InvalidRequest, NotFound, OperationFailed
-from opal_talk.service.settings import setting_problem
+from opal_talk.service.settings import setting_problem, settings_to_str
 from opal_talk.tts.base import EngineUnavailableError, Issue, Report, TtsEngine, VoiceResolutionError
 
 BACKUP_MEMBER = "opal-talk-config.json"
@@ -50,20 +50,6 @@ def _apply_summary(cand: Candidate) -> str:
     if cand.engines is not None:
         parts.append(f"applied engine options ({len(cand.engines)})")
     return "; ".join(parts)
-
-
-def _settings_to_str(raw: dict[str, Any]) -> dict[str, str]:
-    out: dict[str, str] = {}
-    for key, value in raw.items():
-        if isinstance(value, bool):
-            out[str(key)] = "true" if value else "false"
-        elif value is None:
-            out[str(key)] = ""
-        elif isinstance(value, dict | list):
-            out[str(key)] = json.dumps(value)
-        else:
-            out[str(key)] = str(value)
-    return out
 
 
 def _schema_issues(exc: ValidationError, prefix: str) -> list[Issue]:
@@ -324,7 +310,7 @@ class ConfigService:
         raw_settings = self._load_yaml("settings.yaml", "settings", issues)
         if raw_settings is not None:
             if isinstance(raw_settings, dict):
-                cand.settings = _settings_to_str(raw_settings)
+                cand.settings = settings_to_str(raw_settings)
             else:
                 issues.append(Issue("yaml_invalid", "settings must be a mapping", "settings"))
 
@@ -409,7 +395,7 @@ class ConfigService:
             engines={e.engine_id: {"enabled": e.enabled, "options": e.options} for e in export.engines},
             voices=[v.model_dump() for v in export.voices],
             profiles=[p.model_dump() for p in export.profiles],
-            settings=_settings_to_str(export.settings),
+            settings=settings_to_str(export.settings),
         )
         report, descriptions = self.validate_candidate(cand, resources_are_errors=False)
         if not report.valid:
