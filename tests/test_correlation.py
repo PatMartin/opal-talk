@@ -8,6 +8,7 @@ v1 checks), while deliberately invalid identifiers are exercised with
 
 from __future__ import annotations
 
+import re
 from concurrent.futures import ThreadPoolExecutor
 
 import httpx
@@ -63,8 +64,11 @@ def test_invalid_identifiers_are_rejected_with_422(client, bad):
         resp = client.get("/healthz", headers={name: bad})
         assert resp.status_code == 422, (name, bad, resp.text)
         assert resp.json()["detail"], resp.text
-        # Correlation headers are stamped even on the rejection.
-        assert resp.headers["X-Opal-Transaction-Id"]
+        # Correlation headers are stamped even on the rejection, but an invalid
+        # client value is never echoed back.
+        assert re.fullmatch(r"[!-~]{1,128}", resp.headers["X-Opal-Transaction-Id"])
+        assert re.fullmatch(r"[!-~]{1,128}", resp.headers["X-Opal-Request-Id"])
+        assert resp.headers.get(name) != bad
 
 
 def test_every_invalid_identifier_is_reported(client):

@@ -70,11 +70,28 @@ class CorrelationMiddleware:
             return
 
         supplied = {name.decode("latin-1").lower(): value.decode("latin-1") for name, value in scope["headers"]}
+        valid = {
+            name: value
+            for name in CORRELATION_HEADERS
+            if (value := supplied.get(name.lower())) is not None and _ID_PATTERN.fullmatch(value)
+        }
+        errors = [
+            {
+                "loc": ["header", name],
+                "msg": "must match pattern '^[!-~]{1,128}$'",
+                "type": "string_pattern_mismatch",
+                "input": supplied[name.lower()],
+            }
+            for name in CORRELATION_HEADERS
+            if name.lower() in supplied and name not in valid
+        ]
+        # Invalid client values are treated as absent: rejected with 422 and never
+        # echoed back — transaction/request IDs fall back to generated ones.
         ids = CorrelationIds(
-            session_id=supplied.get(SESSION_ID.lower()),
-            transaction_id=supplied.get(TRANSACTION_ID.lower()) or uuid.uuid4().hex,
-            request_id=supplied.get(REQUEST_ID.lower()) or uuid.uuid4().hex,
-            causation_id=supplied.get(CAUSATION_ID.lower()),
+            session_id=valid.get(SESSION_ID),
+            transaction_id=valid.get(TRANSACTION_ID) or uuid.uuid4().hex,
+            request_id=valid.get(REQUEST_ID) or uuid.uuid4().hex,
+            causation_id=valid.get(CAUSATION_ID),
         )
         scope.setdefault("state", {})[_STATE_KEY] = ids
 
@@ -85,16 +102,6 @@ class CorrelationMiddleware:
                     headers[name] = value
             await send(message)
 
-        errors = [
-            {
-                "loc": ["header", name],
-                "msg": "must match pattern '^[!-~]{1,128}$'",
-                "type": "string_pattern_mismatch",
-                "input": value,
-            }
-            for name in CORRELATION_HEADERS
-            if (value := supplied.get(name.lower())) is not None and not _ID_PATTERN.fullmatch(value)
-        ]
         if errors:
             await JSONResponse({"detail": errors}, status_code=422)(scope, receive, send_with_ids)
             return
