@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from importlib.resources import files
+from pathlib import Path
+
 import pytest
 from fastapi.routing import APIRoute
 
@@ -9,6 +12,20 @@ from conftest import ContractClient, make_profile, make_voice
 from contract import SPEC, check_response
 from opal_talk.api.routes import router
 from opal_talk.contract import contract_operations
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_packaged_contract_matches_repo_root():
+    """`opal_talk.yaml` (repo root) and the packaged copy must stay identical.
+
+    Two real files are kept (the root copy is the human-facing document; the packaged
+    copy is what the service and tests load) because symlinks break on Windows
+    checkouts and in built wheels. This test is the drift guard.
+    """
+    assert (ROOT / "opal_talk.yaml").read_bytes() == (
+        files("opal_talk").joinpath("contract/opal_talk.yaml").read_bytes()
+    )
 
 
 def test_every_contract_operation_has_a_server_route():

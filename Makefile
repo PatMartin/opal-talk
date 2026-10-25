@@ -1,9 +1,16 @@
-PY ?= .venv/bin/python
+# Works under POSIX shells and Git Bash on Windows (venv scripts live in Scripts/ there).
+ifeq ($(OS),Windows_NT)
+PY   ?= .venv/Scripts/python.exe
+BOOT ?= python
+else
+PY   ?= .venv/bin/python
+BOOT ?= python3
+endif
 
 .PHONY: install install-spa run spa-dev spa-build test test-fast test-spa lint check
 
 install:            ## create .venv and install service, CLI, engines and dev tools
-	python3 -m venv .venv
+	$(BOOT) -m venv .venv
 	$(PY) -m pip install -U pip
 	$(PY) -m pip install -e '.[engines,dev]'
 
@@ -11,7 +18,7 @@ install-spa:
 	cd spa && npm install
 
 run:                ## start opal-talk-svc using config/service.yaml
-	.venv/bin/opal-talk-svc
+	$(PY) -m opal_talk
 
 spa-dev:            ## Vite dev server on http://127.0.0.1:5173 (API at http://127.0.0.1:8001)
 	cd spa && npm run dev
@@ -29,6 +36,6 @@ test-spa:
 	cd spa && npm test && npm run typecheck
 
 lint:
-	.venv/bin/ruff check src tests
+	$(PY) -m ruff check src tests
 
 check: lint test test-spa

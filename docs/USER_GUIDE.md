@@ -1993,8 +1993,10 @@ missing.
 | Parity | `tests/test_parity.py` | The CLI and SPA operation maps equal the contract |
 | SPA | `spa/src/test/*.test.ts(x)` | Important GUI workflows, and the SPA operation map against the contract |
 
-The contract and parity tests read `opal_talk.yaml` through `src/opal_talk/contract/opal_talk.yaml`, a
-symlink to the repository root. Make sure the root file exists before you run them.
+The contract and parity tests read the packaged contract at `src/opal_talk/contract/opal_talk.yaml`,
+a byte-for-byte copy of the authoritative `opal_talk.yaml` in the repository root. The two are real
+files (symlinks break on Windows checkouts and in built wheels); a contract test asserts they never
+drift. `opal_talk.<version>.yaml` files at the root are the versioned history of the same document.
 
 ---
 
@@ -2017,7 +2019,7 @@ symlink to the repository root. Make sure the root file exists before you run th
 | Stream stops with an incomplete-read error | The engine failed mid-stream. Check the service log. The audio received so far is incomplete. |
 | First request for a voice is slow | The model is loaded on first use. Warm it up with `voices test`. Raise Piper's `cache_size` if you switch between many voices. |
 | Requests queue up | Synthesis is serialized per engine. Use a smaller `chunk_max_chars` for faster first audio, or spread the load across engines. |
-| `/openapi.json` returns `500`, `/docs` shows nothing | The service publishes `src/opal_talk/contract/opal_talk.yaml`, a symlink to `opal_talk.yaml` in the repository root. That file must exist; the repository currently ships it as `opal_talk.1.0.0.yaml`. |
+| `/openapi.json` returns `500`, `/docs` shows nothing | The service publishes `src/opal_talk/contract/opal_talk.yaml`, the packaged copy of `opal_talk.yaml` from the repository root. If the file is missing or unreadable, reinstall/re-checkout the package. |
 | Web GUI is `404` at `/ui` | Build it (`make spa-build`), and check that `spa_dir` points at `spa/dist`. |
 | Browser app gets CORS errors | Add its origin to `cors_origins` in `service.yaml` and restart. |
 | `backup restore` → `backup_not_found` for a copied file | It must be in `<data_dir>/backups/` and keep its `opal-talk-<timestamp>.tar.gz` name. |

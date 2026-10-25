@@ -67,7 +67,7 @@ def test_full_cli_workflow(run, http, tmp_path, config):
     assert json.loads(run("voices update v2 --clear-description").stdout)["description"] is None
     run("voices validate v1")
     wav = tmp_path / "test.wav"
-    result = run(f"voices test v1 -o {wav} --text Hello --sample-rate 16000")
+    result = run(f"voices test v1 -o {wav.as_posix()} --text Hello --sample-rate 16000")
     with wave.open(str(wav)) as w:
         assert w.getframerate() == 16000
     assert "voice=v1" in result.stderr
@@ -82,10 +82,10 @@ def test_full_cli_workflow(run, http, tmp_path, config):
     run(f"profiles remove {p['id']}")
 
     pcm = tmp_path / "out.pcm"
-    result = run(f'generate "Hello there. General Kenobi." -o {pcm} --format pcm --sample-rate 8000')
+    result = run(f'generate "Hello there. General Kenobi." -o {pcm.as_posix()} --format pcm --sample-rate 8000')
     assert pcm.stat().st_size > 0 and "8000 Hz" in result.stderr
     streamed = tmp_path / "stream.pcm"
-    run(f"generate - --stream -o {streamed} --voice v1", stdin="Streaming via stdin.")
+    run(f"generate - --stream -o {streamed.as_posix()} --voice v1", stdin="Streaming via stdin.")
     assert streamed.stat().st_size > 0
     stdout_audio = run("generate Hi --voice v1 -o -").stdout_bytes
     assert stdout_audio[:4] == b"RIFF"
@@ -102,11 +102,11 @@ def test_full_cli_workflow(run, http, tmp_path, config):
     filename = json.loads(run("backup create").stdout)["filename"]
     assert filename in run("backup list").stdout
     target = tmp_path / "b.tar.gz"
-    run(f"backup download {filename} -o {target}")
+    run(f"backup download {filename} -o {target.as_posix()}")
     assert target.stat().st_size > 0
     assert json.loads(run(f"backup restore {filename}").stdout)["success"] is True
     export = tmp_path / "export.json"
-    run(f"backup export -o {export}")
+    run(f"backup export -o {export.as_posix()}")
     assert json.loads(export.read_text())["voices"][0]["voice_id"] == "v1"
     run("backup validate")
     config.config_dir.mkdir(parents=True, exist_ok=True)

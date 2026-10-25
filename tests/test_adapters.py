@@ -3,6 +3,7 @@ plus REST -> service -> real adapter integration."""
 
 from __future__ import annotations
 
+import importlib.util
 import io
 import shutil
 import wave
@@ -117,7 +118,10 @@ class TestKokoroOptions:
         e = KokoroEngine()
         e.configure(e.default_options())
         available, message = e.availability()
-        assert available is False and "model_path" in message
+        assert available is False
+        # With the runtime installed, the message must point at the missing options.
+        if importlib.util.find_spec("kokoro_onnx") is not None:
+            assert "model_path" in message
 
     def test_missing_files(self, tmp_path):
         e = KokoroEngine()

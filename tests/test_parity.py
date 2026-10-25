@@ -33,13 +33,13 @@ def test_every_operation_has_a_cli_command_that_exists():
 
 
 def test_spa_operation_map_matches_contract():
-    ops = json.loads((SPA / "src/api/operations.json").read_text())
+    ops = json.loads((SPA / "src/api/operations.json").read_text(encoding="utf-8"))
     assert {k: (v["method"], v["path"]) for k, v in ops.items()} == contract_operations()
 
 
 def test_spa_ui_uses_every_operation():
     code = "\n".join(
-        p.read_text()
+        p.read_text(encoding="utf-8")
         for p in (SPA / "src").rglob("*.ts*")
         if not {"api", "test"} & set(p.relative_to(SPA / "src").parts[:-1])
     )
