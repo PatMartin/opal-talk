@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
 AudioFormat = Literal["wav", "pcm"]
 VOICE_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
@@ -12,6 +12,18 @@ SampleRate = Annotated[int, Field(ge=8000, le=192000)]
 Speed = Annotated[float, Field(ge=0.25, le=4.0)]
 Volume = Annotated[float, Field(ge=0.0, le=2.0)]
 EngineOptions = dict[str, Any]
+
+_T = TypeVar("_T")
+
+
+def _reject_null(value: Any) -> Any:
+    if value is None:
+        raise ValueError("may not be null")
+    return value
+
+
+# A PATCH body field: may be omitted entirely, but may not be sent as JSON null.
+NonNull = Annotated[_T | None, BeforeValidator(_reject_null)]
 
 
 class _Request(BaseModel):
@@ -45,8 +57,8 @@ class EngineRead(BaseModel):
 
 
 class EngineUpdate(_Patch):
-    enabled: bool = None  # type: ignore[assignment]
-    options: EngineOptions = None  # type: ignore[assignment]
+    enabled: NonNull[bool] = None
+    options: NonNull[EngineOptions] = None
 
 
 # -- voices --------------------------------------------------------------------
@@ -64,13 +76,13 @@ class VoiceCreate(_Request):
 
 
 class VoiceUpdate(_Patch):
-    name: str = Field(default=None, min_length=1, max_length=200)  # type: ignore[assignment]
+    name: NonNull[str] = Field(default=None, min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=1000)
-    engine_id: str = Field(default=None, min_length=1)  # type: ignore[assignment]
-    engine_voice_ref: str = Field(default=None, min_length=1, max_length=2048)  # type: ignore[assignment]
+    engine_id: NonNull[str] = Field(default=None, min_length=1)
+    engine_voice_ref: NonNull[str] = Field(default=None, min_length=1, max_length=2048)
     language: str | None = Field(default=None, max_length=64)
-    enabled: bool = None  # type: ignore[assignment]
-    engine_options: EngineOptions = None  # type: ignore[assignment]
+    enabled: NonNull[bool] = None
+    engine_options: NonNull[EngineOptions] = None
 
 
 class VoiceRead(BaseModel):
@@ -113,15 +125,15 @@ class ProfileCreate(_Request):
 
 
 class ProfileUpdate(_Patch):
-    name: str = Field(default=None, min_length=1, max_length=100)  # type: ignore[assignment]
+    name: NonNull[str] = Field(default=None, min_length=1, max_length=100)
     description: str | None = Field(default=None, max_length=1000)
-    is_active: bool = None  # type: ignore[assignment]
-    voice_id: str = Field(default=None, min_length=1)  # type: ignore[assignment]
-    speed: Speed = None  # type: ignore[assignment]
-    volume: Volume = None  # type: ignore[assignment]
-    output_format: AudioFormat = None  # type: ignore[assignment]
+    is_active: NonNull[bool] = None
+    voice_id: NonNull[str] = Field(default=None, min_length=1)
+    speed: NonNull[Speed] = None
+    volume: NonNull[Volume] = None
+    output_format: NonNull[AudioFormat] = None
     sample_rate: SampleRate | None = None
-    engine_options: EngineOptions = None  # type: ignore[assignment]
+    engine_options: NonNull[EngineOptions] = None
 
 
 class ProfileRead(BaseModel):
