@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 
+from opal_talk.persistence.store import Store
 from opal_talk.tts.audio import resample, to_pcm16, wav_bytes
 from opal_talk.tts.base import OptionSpec, check_options
 from opal_talk.tts.chunking import chunk_text
@@ -86,3 +87,55 @@ class TestOptionChecking:
 
     def test_bool_is_not_int(self):
         assert check_options({"a": True}, self.SPECS, ("generation",))[0].code == "invalid_option"
+
+
+class TestConfigRevision:
+    def test_fresh_store_is_zero(self, tmp_path):
+        store = Store(tmp_path / "db.sqlite")
+        assert store.config_revision() == 0
+        store.close()
+
+    def test_write_transactions_bump(self, tmp_path):
+        store = Store(tmp_path / "db.sqlite")
+        store.upsert_setting("k", "1")
+        assert store.config_revision() == 1
+        store.upsert_setting("k", "2")
+        store.delete_setting("k")
+        assert store.config_revision() == 3
+        store.close()
+
+    def test_read_only_transaction_does_not_bump(self, tmp_path):
+        store = Store(tmp_path / "db.sqlite")
+        store.upsert_setting("k", "1")
+        with store.transaction() as conn:
+            conn.execute("SELECT * FROM settings").fetchall()
+        assert store.config_revision() == 1
+        store.close()
+
+    def test_rolled_back_transaction_does_not_bump(self, tmp_path):
+        store = Store(tmp_path / "db.sqlite")
+        store.upsert_setting("k", "1")
+        with pytest.raises(RuntimeError), store.transaction() as conn:
+            conn.execute("INSERT INTO settings (key, value, updated_at) VALUES ('x', 'y', 't')")
+            raise RuntimeError("boom")
+        assert store.config_revision() == 1 and store.get_setting("x") is None
+        store.close()
+
+    def test_replace_all_bumps_once(self, tmp_path):
+        store = Store(tmp_path / "db.sqlite")
+        before = store.config_revision()
+        store.replace_all(
+            engines={"fake": {"enabled": True, "options": {}}},
+            voices=[], profiles=[], settings={"a": "1"},
+        )
+        assert store.config_revision() == before + 1
+        store.close()
+
+    def test_revision_survives_reopen(self, tmp_path):
+        db = tmp_path / "db.sqlite"
+        store = Store(db)
+        store.upsert_setting("k", "1")
+        store.close()
+        store = Store(db)
+        assert store.config_revision() == 1
+        store.close()

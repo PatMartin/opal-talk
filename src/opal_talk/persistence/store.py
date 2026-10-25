@@ -51,6 +51,10 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 JSON_COLUMNS = {"options", "engine_options", "metadata"}
@@ -95,14 +99,27 @@ class Store:
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
+        """Write transaction. A commit that actually modified rows bumps `config_revision`
+        (the store-wide mutation counter backing ETag/If-Match in contract 1.2.0)."""
         with self._lock:
+            changes_before = self._conn.total_changes
             self._conn.execute("BEGIN IMMEDIATE")
             try:
                 yield self._conn
             except BaseException:
                 self._conn.execute("ROLLBACK")
                 raise
+            if self._conn.total_changes != changes_before:
+                self._conn.execute(
+                    "INSERT INTO meta (key, value) VALUES ('config_revision', '1') "
+                    "ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1"
+                )
             self._conn.execute("COMMIT")
+
+    def config_revision(self) -> int:
+        """Monotonic counter bumped by every committed write transaction (0 if none yet)."""
+        row = self._one("SELECT value FROM meta WHERE key = 'config_revision'")
+        return int(row["value"]) if row else 0
 
     def _all(self, sql: str, params: tuple = ()) -> list[dict[str, Any]]:
         with self._lock:
@@ -231,7 +248,12 @@ class Store:
         profiles: list[dict[str, Any]] | None,
         settings: dict[str, str] | None,
     ) -> None:
-        """Atomically replace each provided section; `None` leaves a section untouched."""
+        """Atomically apply each provided section; `None` leaves a section untouched.
+
+        Voices, profiles and settings are fully replaced (deleted then re-inserted);
+        engine entries are merged — upserted `enabled`/`options` for installed engines,
+        state for unlisted engines is preserved.
+        """
         stamp = now_iso()
         with self.transaction() as conn:
             if engines is not None:
