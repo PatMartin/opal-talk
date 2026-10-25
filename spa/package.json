@@ -4,11 +4,12 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
+    "gen-ops": "node scripts/gen-operations.mjs",
+    "dev": "npm run gen-ops && vite",
+    "build": "npm run gen-ops && tsc -b && vite build",
     "preview": "vite preview",
-    "test": "vitest run",
-    "typecheck": "tsc -b"
+    "test": "npm run gen-ops && vitest run",
+    "typecheck": "npm run gen-ops && tsc -b"
   },
   "dependencies": {
     "react": "^18.3.1",

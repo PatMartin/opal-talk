@@ -7,15 +7,10 @@ from pathlib import Path
 
 import typer.main
 
-from opal_talk.cli.client import OPERATIONS
 from opal_talk.cli.main import COMMANDS, app
 from opal_talk.contract import contract_operations
 
 SPA = Path(__file__).resolve().parents[1] / "spa"
-
-
-def test_cli_client_operation_map_matches_contract():
-    assert contract_operations() == OPERATIONS
 
 
 def test_every_operation_has_a_cli_command_that_exists():
@@ -33,6 +28,8 @@ def test_every_operation_has_a_cli_command_that_exists():
 
 
 def test_spa_operation_map_matches_contract():
+    """operations.json is generated from the contract (spa/scripts/gen-operations.mjs);
+    this fails if the committed artifact is stale."""
     ops = json.loads((SPA / "src/api/operations.json").read_text(encoding="utf-8"))
     assert {k: (v["method"], v["path"]) for k, v in ops.items()} == contract_operations()
 

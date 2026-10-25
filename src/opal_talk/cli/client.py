@@ -10,45 +10,13 @@ from urllib.parse import quote
 
 import httpx
 
+from opal_talk.contract import contract_operations
+
 DEFAULT_API_URL = "http://127.0.0.1:8001"
 
-# operationId -> (method, path template). Must match opal_talk.yaml (verified by tests).
-OPERATIONS: dict[str, tuple[str, str]] = {
-    "list_engines_api_v1_engines__get": ("GET", "/api/v1/engines/"),
-    "get_engine_api_v1_engines__engine_id__get": ("GET", "/api/v1/engines/{engine_id}"),
-    "update_engine_api_v1_engines__engine_id__patch": ("PATCH", "/api/v1/engines/{engine_id}"),
-    "validate_engine_api_v1_engines__engine_id__validate_post": ("POST", "/api/v1/engines/{engine_id}/validate"),
-    "list_voices_api_v1_voices__get": ("GET", "/api/v1/voices/"),
-    "create_voice_api_v1_voices__post": ("POST", "/api/v1/voices/"),
-    "get_voice_api_v1_voices__voice_id__get": ("GET", "/api/v1/voices/{voice_id}"),
-    "update_voice_api_v1_voices__voice_id__patch": ("PATCH", "/api/v1/voices/{voice_id}"),
-    "delete_voice_api_v1_voices__voice_id__delete": ("DELETE", "/api/v1/voices/{voice_id}"),
-    "validate_voice_api_v1_voices__voice_id__validate_post": ("POST", "/api/v1/voices/{voice_id}/validate"),
-    "test_voice_api_v1_voices__voice_id__test_post": ("POST", "/api/v1/voices/{voice_id}/test"),
-    "list_profiles_api_v1_profiles__get": ("GET", "/api/v1/profiles/"),
-    "create_profile_api_v1_profiles__post": ("POST", "/api/v1/profiles/"),
-    "get_profile_api_v1_profiles__profile_id__get": ("GET", "/api/v1/profiles/{profile_id}"),
-    "update_profile_api_v1_profiles__profile_id__patch": ("PATCH", "/api/v1/profiles/{profile_id}"),
-    "delete_profile_api_v1_profiles__profile_id__delete": ("DELETE", "/api/v1/profiles/{profile_id}"),
-    "activate_profile_api_v1_profiles__profile_id__activate_post": ("POST", "/api/v1/profiles/{profile_id}/activate"),
-    "generate_audio_api_v1_generate_post": ("POST", "/api/v1/generate"),
-    "stream_audio_api_v1_generate_stream_post": ("POST", "/api/v1/generate/stream"),
-    "get_all_settings_api_v1_settings__get": ("GET", "/api/v1/settings/"),
-    "get_setting_api_v1_settings__key__get": ("GET", "/api/v1/settings/{key}"),
-    "upsert_setting_api_v1_settings__key__put": ("PUT", "/api/v1/settings/{key}"),
-    "delete_setting_api_v1_settings__key__delete": ("DELETE", "/api/v1/settings/{key}"),
-    "health_check_api_v1_health__get": ("GET", "/api/v1/health/"),
-    "list_backups_api_v1_backup_list_get": ("GET", "/api/v1/backup/list"),
-    "create_backup_api_v1_backup_create_post": ("POST", "/api/v1/backup/create"),
-    "download_backup_api_v1_backup_download__filename__get": ("GET", "/api/v1/backup/download/{filename}"),
-    "restore_backup_api_v1_backup_restore__filename__post": ("POST", "/api/v1/backup/restore/{filename}"),
-    "delete_backup_api_v1_backup__filename__delete": ("DELETE", "/api/v1/backup/{filename}"),
-    "export_config_api_v1_backup_export_get": ("GET", "/api/v1/backup/export"),
-    "import_config_api_v1_backup_import_post": ("POST", "/api/v1/backup/import"),
-    "validate_config_api_v1_backup_validate_get": ("GET", "/api/v1/backup/validate"),
-    "root__get": ("GET", "/"),
-    "healthz_healthz_get": ("GET", "/healthz"),
-}
+# operationId -> (method, path template), derived from the packaged contract so it can
+# never drift from what the service publishes.
+OPERATIONS: dict[str, tuple[str, str]] = contract_operations()
 
 
 def api_url_from_env() -> str:
