@@ -19,12 +19,50 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install (core + dev tools, no engine runtimes)
+      - name: Editable install (core + dev tools, no engine runtimes)
         run: pip install -e ".[dev]"
+      - name: Editable install sanity (contract loads, entry points start)
+        shell: bash
+        run: |
+          python -c "from opal_talk.contract import load_contract, contract_operations; spec = load_contract(); assert spec['info']['version'] == '1.0.0' and contract_operations()"
+          opal-talk-svc --help >/dev/null
+          opal-talk --help >/dev/null
+          opal --help >/dev/null
       - name: Ruff
         run: ruff check src tests
-      - name: Pytest (no real engines)
+      - name: Pytest (includes contract consistency tests; no real engines)
         run: pytest -m "not piper and not kokoro"
+
+  packaging:
+    name: wheel install (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Build wheel
+        run: pip wheel --no-deps -w dist .
+      - name: Wheel bundles the OpenAPI contract
+        run: python -c "import glob, zipfile; whl = glob.glob('dist/*.whl')[0]; assert 'opal_talk/contract/opal_talk.yaml' in zipfile.ZipFile(whl).namelist(), whl"
+      - name: Install wheel into a clean venv
+        shell: bash
+        run: |
+          python -m venv .pkgenv
+          if [ -x .pkgenv/bin/python ]; then PY=.pkgenv/bin/python; else PY=.pkgenv/Scripts/python.exe; fi
+          "$PY" -m pip install dist/*.whl
+      - name: Verify installed package (bundled contract loads, entry points start)
+        shell: bash
+        run: |
+          if [ -x .pkgenv/bin/python ]; then BIN=.pkgenv/bin; else BIN=.pkgenv/Scripts; fi
+          "$BIN/python" -c "from opal_talk.contract import load_contract, contract_operations; spec = load_contract(); assert spec['info']['version'] == '1.0.0'; assert contract_operations()"
+          "$BIN/opal-talk-svc" --help >/dev/null
+          "$BIN/opal-talk" --help >/dev/null
+          "$BIN/opal" --help >/dev/null
 
   spa:
     name: spa
