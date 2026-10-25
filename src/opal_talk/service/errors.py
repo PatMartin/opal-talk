@@ -48,6 +48,16 @@ class Unavailable(ApiError):
     default_code = "engine_unavailable"
 
 
+class PreconditionRequired(ApiError):
+    status = 428
+    default_code = "precondition_required"
+
+
+class PreconditionFailed(ApiError):
+    status = 412
+    default_code = "precondition_failed"
+
+
 class InvalidRequest(Exception):
     """Semantic request validation failure, reported in the HTTPValidationError (422) shape."""
 

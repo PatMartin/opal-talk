@@ -98,10 +98,32 @@ class FakeEngine(TtsEngine):
         yield AudioChunk((0.5 * np.sin(2 * math.pi * pitch * t)).astype(np.float32), rate)
 
 
+def _needs_if_match(method: str, url: str) -> bool:
+    """Configuration mutations carrying the mandatory If-Match precondition."""
+    m = method.upper()
+    if m in {"PATCH", "DELETE"} and url.startswith(("/api/v1/engines/", "/api/v1/voices/", "/api/v1/profiles/")):
+        return True
+    return m in {"PUT", "DELETE", "PATCH"} and url.startswith("/api/v1/settings/")
+
+
 class ContractClient(TestClient):
-    """TestClient that checks every response against opal_talk.yaml."""
+    """TestClient that checks every response against opal_talk.yaml.
+
+    Preconditions: mutating calls auto-attach a fresh `If-Match` (mirroring what a
+    correct client must do) unless `skip_if_match` is set or a header is given.
+    """
+
+    def _config_etag(self) -> str:
+        return self.get("/api/v1/settings/").headers["etag"]
+
+    def _auto_if_match(self, method: str, url, kwargs: dict) -> None:
+        if not getattr(self, "skip_if_match", False) and _needs_if_match(method, str(url)):
+            headers = kwargs["headers"] = kwargs.get("headers") or {}
+            if not any(k.lower() == "if-match" for k in headers):
+                headers["If-Match"] = self._config_etag()
 
     def request(self, method, url, *args, **kwargs):  # type: ignore[override]
+        self._auto_if_match(method, url, kwargs)
         resp = super().request(method, url, *args, **kwargs)
         if not getattr(self, "skip_contract", False):
             check_response(resp)

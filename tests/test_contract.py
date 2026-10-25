@@ -180,6 +180,7 @@ class RecordingClient(ContractClient):
     seen: set[str]
 
     def request(self, method, url, *args, **kwargs):  # type: ignore[override]
+        self._auto_if_match(method, url, kwargs)
         resp = super(ContractClient, self).request(method, url, *args, **kwargs)
         op = check_response(resp)
         if op:

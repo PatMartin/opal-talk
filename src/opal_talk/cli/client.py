@@ -18,6 +18,19 @@ DEFAULT_API_URL = "http://127.0.0.1:8001"
 # never drift from what the service publishes.
 OPERATIONS: dict[str, tuple[str, str]] = contract_operations()
 
+# Operations that mutate logical configuration and carry the mandatory If-Match
+# precondition (contract 1.2.0): the client fetches the current ETag first and
+# retries once on 412.
+PRECONDITION_OPS = {
+    "update_engine_api_v1_engines__engine_id__patch",
+    "update_voice_api_v1_voices__voice_id__patch",
+    "delete_voice_api_v1_voices__voice_id__delete",
+    "update_profile_api_v1_profiles__profile_id__patch",
+    "delete_profile_api_v1_profiles__profile_id__delete",
+    "upsert_setting_api_v1_settings__key__put",
+    "delete_setting_api_v1_settings__key__delete",
+}
+
 
 def api_url_from_env() -> str:
     return os.environ.get("OPAL_TALK_API_URL", DEFAULT_API_URL)
@@ -64,6 +77,9 @@ class ApiClient:
                 body = resp.text
             raise ApiCallError(resp.status_code, body)
 
+    def _config_etag(self) -> str:
+        return self.http.get("/api/v1/settings/").headers.get("ETag", "")
+
     def call(
         self,
         op: str,
@@ -73,7 +89,12 @@ class ApiClient:
     ) -> httpx.Response:
         method, url = self._request_args(op, path_params)
         clean = {k: v for k, v in (params or {}).items() if v is not None}
-        resp = self.http.request(method, url, params=clean or None, json=json)
+        headers = {"If-Match": self._config_etag()} if op in PRECONDITION_OPS else None
+        resp = self.http.request(method, url, params=clean or None, json=json, headers=headers)
+        if resp.status_code == 412:  # stale revision: refresh the ETag and retry once
+            resp = self.http.request(
+                method, url, params=clean or None, json=json, headers={"If-Match": self._config_etag()}
+            )
         self._raise_for(resp)
         return resp
 

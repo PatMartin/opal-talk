@@ -6,7 +6,7 @@ import re
 
 from httpx import Response
 
-from conftest import make_profile, make_voice
+from conftest import make_voice
 
 IDS = {"X-Opal-Session-Id": "sess-e1", "X-Opal-Causation-Id": "cause-e1"}
 

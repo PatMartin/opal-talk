@@ -70,14 +70,37 @@ export function buildUrl(op: OpId, opts: CallOptions = {}): string {
   return `${apiBase()}${path}${query ? `?${query}` : ''}`
 }
 
-/** Perform an operation and return the raw Response (throws ApiError for non-2xx). */
-export async function callRaw(op: OpId, opts: CallOptions = {}): Promise<Response> {
-  const init: RequestInit = { method: operations[op].method, signal: opts.signal }
+/** Mutations on logical configuration carrying the mandatory If-Match precondition. */
+const PRECONDITION_OPS = new Set<OpId>([
+  'update_engine_api_v1_engines__engine_id__patch',
+  'update_voice_api_v1_voices__voice_id__patch',
+  'delete_voice_api_v1_voices__voice_id__delete',
+  'update_profile_api_v1_profiles__profile_id__patch',
+  'delete_profile_api_v1_profiles__profile_id__delete',
+  'upsert_setting_api_v1_settings__key__put',
+  'delete_setting_api_v1_settings__key__delete',
+])
+
+async function send(op: OpId, opts: CallOptions, ifMatch: string | null): Promise<Response> {
+  const headers: Record<string, string> = {}
+  if (ifMatch) headers['If-Match'] = ifMatch
+  const init: RequestInit = { method: operations[op].method, signal: opts.signal, headers }
   if (opts.body !== undefined) {
-    init.headers = { 'Content-Type': 'application/json' }
+    headers['Content-Type'] = 'application/json'
     init.body = JSON.stringify(opts.body)
   }
-  const resp = await fetch(buildUrl(op, opts), init)
+  return fetch(buildUrl(op, opts), init)
+}
+
+async function configEtag(): Promise<string> {
+  const resp = await send('get_all_settings_api_v1_settings__get', {}, null)
+  return resp.headers.get('ETag') ?? ''
+}
+
+/** Perform an operation and return the raw Response (throws ApiError for non-2xx). */
+export async function callRaw(op: OpId, opts: CallOptions = {}): Promise<Response> {
+  let resp = await send(op, opts, PRECONDITION_OPS.has(op) ? await configEtag() : null)
+  if (resp.status === 412) resp = await send(op, opts, await configEtag()) // stale ETag: refresh once, retry
   if (!resp.ok) {
     const text = await resp.text()
     let body: unknown = text

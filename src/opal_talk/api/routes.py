@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, Path, Query, Request, Response
+from fastapi import APIRouter, Body, Depends, Header, Path, Query, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 
@@ -33,6 +33,7 @@ from opal_talk.schemas import (
     VoiceTestRequest,
     VoiceUpdate,
 )
+from opal_talk.service.concurrency import config_etag, mutate_with_revision
 from opal_talk.service.container import Services
 from opal_talk.tts.base import Report
 
@@ -64,20 +65,23 @@ def report_dict(report: Report) -> dict[str, Any]:
 
 @router.get("/api/v1/engines/", tags=["engines"], operation_id="list_engines_api_v1_engines__get",
             response_model=list[EngineRead])
-def list_engines(svc: Services = Depends(services)):
+def list_engines(response: Response, svc: Services = Depends(services)):
+    response.headers["ETag"] = config_etag(svc.store)
     return svc.engines.list()
 
 
 @router.get("/api/v1/engines/{engine_id}", tags=["engines"], operation_id="get_engine_api_v1_engines__engine_id__get",
             response_model=EngineRead)
-def get_engine(engine_id: str, svc: Services = Depends(services)):
+def get_engine(engine_id: str, response: Response, svc: Services = Depends(services)):
+    response.headers["ETag"] = config_etag(svc.store)
     return svc.engines.get(engine_id)
 
 
 @router.patch("/api/v1/engines/{engine_id}", tags=["engines"],
               operation_id="update_engine_api_v1_engines__engine_id__patch", response_model=EngineRead)
-def update_engine(engine_id: str, body: EngineUpdate, svc: Services = Depends(services)):
-    return svc.engines.update(engine_id, body.changes())
+def update_engine(engine_id: str, body: EngineUpdate, if_match: str | None = Header(None),
+                  svc: Services = Depends(services)):
+    return mutate_with_revision(svc.store, if_match, lambda: svc.engines.update(engine_id, body.changes()))
 
 
 @router.post("/api/v1/engines/{engine_id}/validate", tags=["engines"],
@@ -92,10 +96,12 @@ def validate_engine(engine_id: str, svc: Services = Depends(services)):
 @router.get("/api/v1/voices/", tags=["voices"], operation_id="list_voices_api_v1_voices__get",
             response_model=list[VoiceRead])
 def list_voices(
+    response: Response,
     engine_id: str | None = Query(None, min_length=1),
     enabled: bool | None = Query(None),
     svc: Services = Depends(services),
 ):
+    response.headers["ETag"] = config_etag(svc.store)
     return svc.voices.list(engine_id, enabled)
 
 
@@ -107,20 +113,22 @@ def create_voice(body: VoiceCreate, svc: Services = Depends(services)):
 
 @router.get("/api/v1/voices/{voice_id}", tags=["voices"], operation_id="get_voice_api_v1_voices__voice_id__get",
             response_model=VoiceRead)
-def get_voice(voice_id: str, svc: Services = Depends(services)):
+def get_voice(voice_id: str, response: Response, svc: Services = Depends(services)):
+    response.headers["ETag"] = config_etag(svc.store)
     return svc.voices.get(voice_id)
 
 
 @router.patch("/api/v1/voices/{voice_id}", tags=["voices"], operation_id="update_voice_api_v1_voices__voice_id__patch",
               response_model=VoiceRead)
-def update_voice(voice_id: str, body: VoiceUpdate, svc: Services = Depends(services)):
-    return svc.voices.update(voice_id, body)
+def update_voice(voice_id: str, body: VoiceUpdate, if_match: str | None = Header(None),
+                svc: Services = Depends(services)):
+    return mutate_with_revision(svc.store, if_match, lambda: svc.voices.update(voice_id, body))
 
 
 @router.delete("/api/v1/voices/{voice_id}", tags=["voices"],
                operation_id="delete_voice_api_v1_voices__voice_id__delete", status_code=204)
-def delete_voice(voice_id: str, svc: Services = Depends(services)):
-    svc.voices.delete(voice_id)
+def delete_voice(voice_id: str, if_match: str | None = Header(None), svc: Services = Depends(services)):
+    mutate_with_revision(svc.store, if_match, lambda: svc.voices.delete(voice_id))
     return Response(status_code=204)
 
 
@@ -148,7 +156,8 @@ async def test_voice(voice_id: str, body: VoiceTestRequest | None = Body(None), 
 
 @router.get("/api/v1/profiles/", tags=["profiles"], operation_id="list_profiles_api_v1_profiles__get",
             response_model=list[ProfileRead])
-def list_profiles(svc: Services = Depends(services)):
+def list_profiles(response: Response, svc: Services = Depends(services)):
+    response.headers["ETag"] = config_etag(svc.store)
     return svc.profiles.list()
 
 
@@ -160,20 +169,22 @@ def create_profile(body: ProfileCreate, svc: Services = Depends(services)):
 
 @router.get("/api/v1/profiles/{profile_id}", tags=["profiles"],
             operation_id="get_profile_api_v1_profiles__profile_id__get", response_model=ProfileRead)
-def get_profile(profile_id: int = ProfileId, svc: Services = Depends(services)):
+def get_profile(response: Response, profile_id: int = ProfileId, svc: Services = Depends(services)):
+    response.headers["ETag"] = config_etag(svc.store)
     return svc.profiles.get(profile_id)
 
 
 @router.patch("/api/v1/profiles/{profile_id}", tags=["profiles"],
               operation_id="update_profile_api_v1_profiles__profile_id__patch", response_model=ProfileRead)
-def update_profile(body: ProfileUpdate, profile_id: int = ProfileId, svc: Services = Depends(services)):
-    return svc.profiles.update(profile_id, body)
+def update_profile(body: ProfileUpdate, profile_id: int = ProfileId, if_match: str | None = Header(None),
+                   svc: Services = Depends(services)):
+    return mutate_with_revision(svc.store, if_match, lambda: svc.profiles.update(profile_id, body))
 
 
 @router.delete("/api/v1/profiles/{profile_id}", tags=["profiles"],
                operation_id="delete_profile_api_v1_profiles__profile_id__delete", status_code=204)
-def delete_profile(profile_id: int = ProfileId, svc: Services = Depends(services)):
-    svc.profiles.delete(profile_id)
+def delete_profile(profile_id: int = ProfileId, if_match: str | None = Header(None), svc: Services = Depends(services)):
+    mutate_with_revision(svc.store, if_match, lambda: svc.profiles.delete(profile_id))
     return Response(status_code=204)
 
 
@@ -216,26 +227,29 @@ async def stream_audio(body: GenerateStreamRequest, svc: Services = Depends(serv
 
 
 @router.get("/api/v1/settings/", tags=["settings"], operation_id="get_all_settings_api_v1_settings__get")
-def get_all_settings(svc: Services = Depends(services)) -> dict[str, Any]:
+def get_all_settings(response: Response, svc: Services = Depends(services)) -> dict[str, Any]:
+    response.headers["ETag"] = config_etag(svc.store)
     return svc.settings.all()
 
 
 @router.get("/api/v1/settings/{key}", tags=["settings"], operation_id="get_setting_api_v1_settings__key__get",
             response_model=SettingRead)
-def get_setting(key: str = SettingKey, svc: Services = Depends(services)):
+def get_setting(response: Response, key: str = SettingKey, svc: Services = Depends(services)):
+    response.headers["ETag"] = config_etag(svc.store)
     return svc.settings.get(key)
 
 
 @router.put("/api/v1/settings/{key}", tags=["settings"], operation_id="upsert_setting_api_v1_settings__key__put",
             response_model=SettingRead)
-def upsert_setting(body: SettingUpdate, key: str = SettingKey, svc: Services = Depends(services)):
-    return svc.settings.upsert(key, body.value)
+def upsert_setting(body: SettingUpdate, key: str = SettingKey, if_match: str | None = Header(None),
+                   svc: Services = Depends(services)):
+    return mutate_with_revision(svc.store, if_match, lambda: svc.settings.upsert(key, body.value))
 
 
 @router.delete("/api/v1/settings/{key}", tags=["settings"], operation_id="delete_setting_api_v1_settings__key__delete",
                status_code=204)
-def delete_setting(key: str = SettingKey, svc: Services = Depends(services)):
-    svc.settings.delete(key)
+def delete_setting(key: str = SettingKey, if_match: str | None = Header(None), svc: Services = Depends(services)):
+    mutate_with_revision(svc.store, if_match, lambda: svc.settings.delete(key))
     return Response(status_code=204)
 
 

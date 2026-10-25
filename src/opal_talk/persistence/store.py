@@ -116,6 +116,16 @@ class Store:
                 )
             self._conn.execute("COMMIT")
 
+    @contextmanager
+    def write_lock(self) -> Iterator[None]:
+        """Hold the write lock across a revision check plus its mutation.
+
+        Every write goes through `transaction()` on this same lock, so holding it
+        makes a check-and-mutate atomic against other writers (TOCTOU guard).
+        """
+        with self._lock:
+            yield
+
     def config_revision(self) -> int:
         """Monotonic counter bumped by every committed write transaction (0 if none yet)."""
         row = self._one("SELECT value FROM meta WHERE key = 'config_revision'")
