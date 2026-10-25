@@ -6,10 +6,10 @@ from importlib.resources import files
 from pathlib import Path
 
 import pytest
+from contract_check import SPEC, check_response
 from fastapi.routing import APIRoute
 
 from conftest import ContractClient, make_profile, make_voice
-from contract import SPEC, check_response
 from opal_talk.api.routes import router
 from opal_talk.contract import contract_operations
 

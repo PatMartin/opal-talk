@@ -130,6 +130,10 @@ def validate_voice(voice_id: str, svc: Services = Depends(services)):
     return report_dict(svc.voices.validate(voice_id))
 
 
+# Deliberate asymmetry: CRUD handlers are sync `def` (FastAPI runs them in the threadpool
+# automatically); the three audio handlers are `async` because they must control *when* work
+# is dispatched — generate/voice-test produce the first block before 200 is committed, and
+# stream keeps a generator alive for the response body.
 @router.post("/api/v1/voices/{voice_id}/test", tags=["voices"],
              operation_id="test_voice_api_v1_voices__voice_id__test_post", response_class=Response)
 async def test_voice(voice_id: str, body: VoiceTestRequest | None = Body(None), svc: Services = Depends(services)):

@@ -7,9 +7,9 @@ import time
 
 import httpx
 import pytest
+from contract_check import check_response
 
 from conftest import make_profile, make_voice
-from contract import check_response
 
 SENTENCES = " ".join(f"This is sentence number {i}." for i in range(6))
 

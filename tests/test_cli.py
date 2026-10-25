@@ -7,10 +7,10 @@ import shlex
 import wave
 
 import pytest
+from contract_check import check_response, match_operation
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
-from contract import check_response, match_operation
 from opal_talk.cli import main as cli
 from opal_talk.cli.client import ApiClient
 from opal_talk.contract import contract_operations

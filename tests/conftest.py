@@ -10,9 +10,9 @@ from typing import Any
 
 import numpy as np
 import pytest
+from contract_check import check_response
 from fastapi.testclient import TestClient
 
-from contract import check_response
 from opal_talk.api.app import create_app
 from opal_talk.config import ServiceConfig
 from opal_talk.tts.base import (
