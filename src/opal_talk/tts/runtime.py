@@ -21,6 +21,18 @@ from typing import Any
 from opal_talk.tts.base import EngineUnavailableError, TtsEngine
 from opal_talk.tts.registry import EngineRegistry
 
+# Reserved engine option handled at runtime level (never passed to adapters):
+# how many synthesize() calls may run concurrently on one engine. Default 1
+# preserves the old serialized behavior.
+RUNTIME_OPTION = "max_concurrent_inferences"
+
+
+def split_runtime_options(options: dict[str, Any]) -> tuple[dict[str, Any], int | None]:
+    """Split adapter options from the runtime-level `max_concurrent_inferences` key."""
+    rest = {k: v for k, v in options.items() if k != RUNTIME_OPTION}
+    raw = options.get(RUNTIME_OPTION)
+    return rest, (None if raw is None else int(raw))
+
 
 @dataclass(eq=False)
 class _RuntimeRecord:
@@ -34,7 +46,9 @@ class _RuntimeRecord:
     engine: TtsEngine
     generation: int
     options: dict[str, Any] | None
-    lock: threading.Lock
+    sem: threading.BoundedSemaphore
+    permits: int
+    waiters: int = 0
     refs: int = 0
     retired: bool = False
     pending: _RuntimeRecord | None = None
@@ -46,24 +60,26 @@ class _RuntimeRecord:
 class EngineRuntime:
     """A usage reference bound to one runtime record (engine instance + generation).
 
-    Enter it (`with rt:`) around adapter calls to serialize work on that instance —
-    the same per-engine locking the service had before. `release()` detaches the
-    reference; release exactly once.
+    Enter it (`with rt:`) around adapter calls to take an inference permit — at most
+    `record.permits` run concurrently, and at most `permits` more may queue before
+    `EngineUnavailableError` rejects the request (bounded backpressure).
+    `release()` detaches the reference; release exactly once.
     """
 
     engine: TtsEngine
     _record: _RuntimeRecord
+    _mgr: EngineRuntimeManager
     _held: bool = False
 
     def acquire(self) -> EngineRuntime:
-        self._record.lock.acquire()
+        self._mgr._enter(self._record)
         self._held = True
         return self
 
     def release(self) -> None:
         if self._held:
             self._held = False
-            self._record.lock.release()
+            self._record.sem.release()
 
     def __enter__(self) -> EngineRuntime:
         return self if self._held else self.acquire()
@@ -88,9 +104,34 @@ class EngineRuntimeManager:
         self._guard = threading.Lock()
         self._records: dict[str, _RuntimeRecord] = {}
         for engine in registry.all():
-            rec = _RuntimeRecord(engine, generation=0, options=None, lock=threading.Lock())
+            rec = _RuntimeRecord(
+                engine, generation=0, options=None,
+                sem=threading.BoundedSemaphore(1), permits=1,
+            )
             rec.ready.set()
             self._records[engine.engine_id] = rec
+
+    @staticmethod
+    def _limit(engine: TtsEngine, options: dict[str, Any] | None) -> int:
+        """Effective concurrency: configured limit clamped to the adapter's declared cap."""
+        _, configured = split_runtime_options(options or {})
+        declared = int(getattr(engine, "max_concurrent_inferences", 1))
+        return max(1, min(configured or 1, declared))
+
+    def _enter(self, rec: _RuntimeRecord) -> None:
+        """Take an inference permit; reject when the wait queue is already full."""
+        with self._guard:
+            if rec.waiters >= rec.permits:
+                raise EngineUnavailableError(
+                    f"engine '{rec.engine.engine_id}' is at capacity "
+                    f"({rec.permits} in flight, {rec.waiters} waiting)"
+                )
+            rec.waiters += 1
+        try:
+            rec.sem.acquire()
+        finally:
+            with self._guard:
+                rec.waiters -= 1
 
     def _record(self, engine_id: str) -> _RuntimeRecord:
         try:
@@ -119,11 +160,11 @@ class EngineRuntimeManager:
             rec.refs += 1
         rec.ready.wait()
         if rec.failed is not None:
-            self.release(EngineRuntime(rec.engine, rec))
+            self.release(EngineRuntime(rec.engine, rec, self))
             raise EngineUnavailableError(
                 f"engine '{engine_id}' reconfiguration failed: {rec.failed}"
             ) from rec.failed
-        return EngineRuntime(rec.engine, rec)
+        return EngineRuntime(rec.engine, rec, self)
 
     def release(self, runtime: EngineRuntime) -> None:
         """Detach a usage reference; applies a deferred reconfiguration on drain."""
@@ -137,7 +178,7 @@ class EngineRuntimeManager:
         if pending is not None:
             # Outside the guard: configure may be slow; pending.ready gates use anyway.
             try:
-                rec.engine.configure(pending.options or {})
+                rec.engine.configure(split_runtime_options(pending.options or {})[0])
             except Exception as exc:  # noqa: BLE001 - surface it to future acquirers
                 pending.failed = exc
             pending.ready.set()
@@ -160,15 +201,18 @@ class EngineRuntimeManager:
         No active users: applies immediately — a raise leaves the previous record
         active and untouched. Active users: defers until they release.
         """
+        adapter_options, _ = split_runtime_options(options)
         with self._guard:
             old = self._record(engine_id)
             if old.refs == 0:
-                old.engine.configure(options)  # raises with nothing swapped
+                old.engine.configure(adapter_options)  # raises with nothing swapped
+            permits = self._limit(old.engine, options)
             new = _RuntimeRecord(
                 engine=old.engine,
                 generation=old.generation + 1,
                 options=dict(options),
-                lock=old.lock,  # same instance -> same serialization lock
+                sem=threading.BoundedSemaphore(permits),
+                permits=permits,
             )
             if old.refs == 0:
                 new.ready.set()

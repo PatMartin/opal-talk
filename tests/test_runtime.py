@@ -206,3 +206,123 @@ def test_update_rolls_back_runtime_when_store_write_fails(config, monkeypatch):
     assert services.store.get_engine_state("fake")["options"] == old_options
     assert engine.options.get("available", True) is True
     services.close()
+
+
+# -- bounded inference concurrency ------------------------------------------------
+
+
+def test_limit_one_serializes_by_default(manager):
+    """Unconfigured engines keep the old serialized behavior (permit count 1)."""
+    assert manager._records["fake"].permits == 1
+    gate = threading.Event()
+
+    def first() -> None:
+        with manager.using("fake"):
+            gate.wait(5)
+
+    t1 = threading.Thread(target=first)
+    t1.start()
+    time.sleep(0.05)
+
+    def queued() -> None:
+        with manager.using("fake"):
+            pass
+
+    t2 = threading.Thread(target=queued)
+    t2.start()
+    deadline = time.time() + 5
+    while manager._records["fake"].waiters < 1:
+        assert time.time() < deadline
+        time.sleep(0.01)
+    # holder + one queued waiter fills the queue -> the next request is rejected.
+    with pytest.raises(EngineUnavailableError, match="at capacity"), manager.using("fake"):
+        pass
+    gate.set()
+    t1.join(5)
+    t2.join(5)
+
+
+def test_configured_limit_two_runs_two_in_parallel():
+    manager = EngineRuntimeManager(EngineRegistry([FakeEngine("fake")]))
+    manager.configure("fake", {"max_concurrent_inferences": 2})
+    assert manager._records["fake"].permits == 2
+    barrier = threading.Barrier(2, timeout=5)
+    done: list[int] = []
+
+    def work(i: int) -> None:
+        with manager.using("fake"):
+            barrier.wait()  # only passes if both callers hold permits concurrently
+            done.append(i)
+
+    threads = [threading.Thread(target=work, args=(i,)) for i in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(5)
+    assert sorted(done) == [0, 1]
+
+
+def test_waiters_bounded_then_rejected():
+    """permits in flight + permits waiting is the cap; the next request is rejected."""
+    manager = EngineRuntimeManager(EngineRegistry([FakeEngine("fake")]))
+    manager.configure("fake", {"max_concurrent_inferences": 2})
+    held = [manager.acquire("fake") for _ in range(2)]
+    for rt in held:
+        rt.acquire()
+    queued = threading.Event()
+
+    def waiter() -> None:
+        queued.set()
+        with manager.using("fake"):
+            pass
+
+    threads = [threading.Thread(target=waiter) for _ in range(2)]
+    for t in threads:
+        t.start()
+    deadline = time.time() + 5
+    while manager._records["fake"].waiters < 2:
+        assert time.time() < deadline
+        time.sleep(0.01)
+    rt = manager.acquire("fake")
+    try:
+        with pytest.raises(EngineUnavailableError, match="at capacity"), rt:
+            pass
+    finally:
+        manager.release(rt)
+    for h in held:
+        h.release()
+    for t in threads:
+        t.join(5)
+    for h in held:
+        manager.release(h)
+
+
+def test_configured_limit_clamped_to_adapter_cap():
+    """Piper/Kokoro declare cap 1; a bigger configured limit can't make them parallel."""
+    manager = EngineRuntimeManager(EngineRegistry([FakeEngine("fake")]))  # FakeEngine cap = 4
+    manager.configure("fake", {"max_concurrent_inferences": 99})
+    assert manager._records["fake"].permits == 4
+    engine = manager.get("fake")
+    engine.max_concurrent_inferences = 1  # e.g. a real adapter that isn't thread-safe
+    manager.configure("fake", {"max_concurrent_inferences": 8})
+    assert manager._records["fake"].permits == 1
+
+
+def test_runtime_option_is_not_visible_to_adapter():
+    manager = EngineRuntimeManager(EngineRegistry([FakeEngine("fake")]))
+    manager.configure("fake", {"max_concurrent_inferences": 2, "available": False})
+    engine = manager.get("fake")
+    assert "max_concurrent_inferences" not in engine.options
+    assert engine.options["available"] is False
+
+
+def test_engine_update_accepts_runtime_option(client):
+    resp = client.patch("/api/v1/engines/fake", json={"options": {"max_concurrent_inferences": 2}})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["options"]["max_concurrent_inferences"] == 2
+
+
+def test_engine_update_rejects_invalid_limit(client):
+    client.skip_contract = True
+    resp = client.patch("/api/v1/engines/fake", json={"options": {"max_concurrent_inferences": 0}})
+    assert resp.status_code == 422

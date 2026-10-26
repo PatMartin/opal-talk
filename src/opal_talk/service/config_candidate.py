@@ -21,6 +21,7 @@ from opal_talk.service.catalog import EngineService
 from opal_talk.service.errors import Conflict, OperationFailed
 from opal_talk.service.settings import setting_problem, settings_to_str
 from opal_talk.tts.base import EngineUnavailableError, Issue, Report, TtsEngine, VoiceResolutionError
+from opal_talk.tts.runtime import split_runtime_options
 
 CONFIG_FILES = ("engines.yaml", "voices.yaml", "profiles.yaml", "settings.yaml")
 
@@ -105,7 +106,7 @@ class CandidateService:
             engine = self.engines.runtime.get(engine_id)
             if engine is None:
                 continue
-            for issue in engine.validate_options(state["options"], "engine"):
+            for issue in engine.validate_options(split_runtime_options(state["options"])[0], "engine"):
                 report.errors.append(Issue(issue.code, issue.message, f"engines.{engine_id}.options.{issue.field}"))
 
         voices = cand.voices if cand.voices is not None else self.store.list_voices()

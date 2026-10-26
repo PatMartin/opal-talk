@@ -120,6 +120,9 @@ class TtsEngine(ABC):
     description: str | None = None
     option_specs: Mapping[str, OptionSpec] = {}
     speed_range: tuple[float, float] = (0.25, 4.0)
+    # Thread-safety bound the adapter guarantees for concurrent synthesize() calls.
+    # Adapters may raise it; a configured limit can only ever shrink to this cap.
+    max_concurrent_inferences: int = 1
 
     def __init__(self) -> None:
         self._options: dict[str, Any] = {}

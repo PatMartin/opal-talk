@@ -58,6 +58,9 @@ class FakeEngine(TtsEngine):
         "strict": OptionSpec((bool,), ("generation",)),
         "delay": OptionSpec((int, float), ("generation",)),
     }
+    # The fake adapter is thread-safe: it declares support for parallel inference,
+    # so tests can exercise limits > 1. Default configured limit is still 1.
+    max_concurrent_inferences = 4
 
     def __init__(self, engine_id: str = "fake", speed_range: tuple[float, float] = (0.25, 4.0),
                  voices: dict[str, int] | None = None):

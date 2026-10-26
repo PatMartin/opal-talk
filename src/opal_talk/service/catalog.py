@@ -9,7 +9,7 @@ from opal_talk.persistence.store import Store, now_iso
 from opal_talk.schemas import ProfileCreate, ProfileUpdate, VoiceCreate, VoiceUpdate
 from opal_talk.service.errors import Conflict, InvalidRequest, NotFound
 from opal_talk.tts.base import EngineUnavailableError, Issue, Report, TtsEngine, VoiceResolutionError
-from opal_talk.tts.runtime import EngineRuntimeManager
+from opal_talk.tts.runtime import RUNTIME_OPTION, EngineRuntimeManager, split_runtime_options
 
 log = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ class EngineService:
             self.apply(engine, state["options"])
 
     def apply(self, engine: TtsEngine, options: dict[str, Any]) -> None:
-        issues = engine.validate_options(options, "engine")
+        issues = engine.validate_options(split_runtime_options(options)[0], "engine")
         if issues:
             log.warning("engine %s has invalid options: %s", engine.engine_id, [i.message for i in issues])
         self.runtime.configure(engine.engine_id, options)
@@ -82,7 +82,12 @@ class EngineService:
         options = state["options"]
         if "options" in changes:
             options = merge_patch(options, changes["options"])
-            issues = engine.validate_options(options, "engine")
+            issues = engine.validate_options(split_runtime_options(options)[0], "engine")
+            raw = options.get(RUNTIME_OPTION)
+            if raw is not None and (isinstance(raw, bool) or not isinstance(raw, int) or raw < 1):
+                issues.append(
+                    Issue("invalid_option", f"option '{RUNTIME_OPTION}' must be an integer >= 1", RUNTIME_OPTION)
+                )
             if issues:
                 raise InvalidRequest.from_issues(["body", "options"], issues, options)
         enabled = changes.get("enabled", state["enabled"])
