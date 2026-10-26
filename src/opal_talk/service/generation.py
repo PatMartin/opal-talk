@@ -27,10 +27,21 @@ from opal_talk.tts.base import (
     VoiceResolutionError,
 )
 from opal_talk.tts.chunking import chunk_text
+from opal_talk.tts.runtime import EngineRuntime
 
 
 @dataclass(frozen=True)
 class GenerationPlan:
+    """A resolved generation request bound to one runtime generation.
+
+    `runtime` is acquired inside plan() and pins the engine generation the request
+    was validated against: reconfiguration defers until it drains, so routing,
+    option validation, sample-rate resolution and synthesis all observe one
+    consistent engine configuration. Ownership transfers to the consumer:
+    render()/pcm_stream()/test_voice() release it on every exit path, and
+    release() itself is idempotent for early-close or abandoned-plan paths.
+    """
+
     chunks: list[str]
     voice: dict[str, Any]
     engine: TtsEngine
@@ -40,6 +51,11 @@ class GenerationPlan:
     output_format: str
     sample_rate: int
     options: dict[str, Any]
+    runtime: EngineRuntime
+
+    def release(self) -> None:
+        """Detach the bound runtime reference (idempotent)."""
+        self.runtime.detach()
 
     def headers(self, output_format: str | None = None) -> dict[str, str]:
         headers = {
@@ -93,7 +109,14 @@ class GenerationService:
             raise InvalidRequest.single(["body", "text"], "text contains nothing to speak", input_=text)
         return chunks
 
-    def _route(self, voice: dict[str, Any], engine_override: str | None) -> TtsEngine:
+    def _route(self, voice: dict[str, Any], engine_override: str | None) -> tuple[TtsEngine, EngineRuntime]:
+        """Resolve the target engine and bind its current runtime generation.
+
+        The bound reference pins the configuration generation for the whole request:
+        a reconfiguration defers until it drains, so every engine call this request
+        makes — validation here, sample-rate resolution and synthesis — observes the
+        same engine configuration. Any failure releases the binding before raising.
+        """
         voice_id = voice["voice_id"]
         if not voice["enabled"]:
             raise Conflict(f"voice '{voice_id}' is disabled", "voice_disabled", {"voice_id": voice_id})
@@ -101,24 +124,32 @@ class GenerationService:
         engine = self.engines.runtime.get(engine_id)
         if engine is None:
             raise Conflict(f"engine '{engine_id}' is not installed", "engine_not_found", {"engine_id": engine_id})
-        if engine_id != voice["engine_id"]:
-            mismatch = Conflict(
-                "The requested engine cannot use the resolved voice.",
-                "voice_engine_mismatch",
-                {"voice_id": voice_id, "requested_engine_id": engine_id},
-            )
-            if engine.validate_options(voice["engine_options"], "voice"):
-                raise mismatch
-            try:
-                engine.describe_voice(voice["engine_voice_ref"], voice["engine_options"])
-            except (VoiceResolutionError, EngineUnavailableError) as exc:
-                raise mismatch from exc
-        if not self.engines.state(engine_id)["enabled"]:
-            raise Conflict(f"engine '{engine_id}' is disabled", "engine_disabled", {"engine_id": engine_id})
-        available, message = engine.availability()
-        if not available:
-            raise Unavailable(message or f"engine '{engine_id}' is unavailable", details={"engine_id": engine_id})
-        return engine
+        try:
+            runtime = self.engines.runtime.acquire(engine_id)
+        except EngineUnavailableError as exc:
+            raise translate_engine_error(exc) from exc
+        try:
+            if engine_id != voice["engine_id"]:
+                mismatch = Conflict(
+                    "The requested engine cannot use the resolved voice.",
+                    "voice_engine_mismatch",
+                    {"voice_id": voice_id, "requested_engine_id": engine_id},
+                )
+                if engine.validate_options(voice["engine_options"], "voice"):
+                    raise mismatch
+                try:
+                    engine.describe_voice(voice["engine_voice_ref"], voice["engine_options"])
+                except (VoiceResolutionError, EngineUnavailableError) as exc:
+                    raise mismatch from exc
+            if not self.engines.state(engine_id)["enabled"]:
+                raise Conflict(f"engine '{engine_id}' is disabled", "engine_disabled", {"engine_id": engine_id})
+            available, message = engine.availability()
+            if not available:
+                raise Unavailable(message or f"engine '{engine_id}' is unavailable", details={"engine_id": engine_id})
+            return engine, runtime
+        except Exception:
+            self.engines.runtime.release(runtime)
+            raise
 
     def _plan(
         self,
@@ -132,6 +163,7 @@ class GenerationService:
         output_format: str,
         sample_rate: int | None,
         option_layers: list[dict[str, Any]],
+        runtime: EngineRuntime,
     ) -> GenerationPlan:
         lo, hi = engine.speed_range
         if not lo <= speed <= hi:
@@ -161,6 +193,7 @@ class GenerationService:
             output_format=output_format,
             sample_rate=int(sample_rate),
             options=options,
+            runtime=runtime,
         )
 
     def plan(self, req: GenerateRequest | GenerateStreamRequest) -> GenerationPlan:
@@ -181,50 +214,61 @@ class GenerationService:
         voice = self.store.get_voice(voice_id)
         if voice is None:
             raise Conflict(f"voice '{voice_id}' is not registered", "voice_not_found", {"voice_id": voice_id})
-        engine = self._route(voice, req.engine_id)
+        engine, runtime = self._route(voice, req.engine_id)
+        try:
+            request_issues = engine.validate_options(req.engine_options, "generation")
+            if request_issues:
+                raise InvalidRequest.from_issues(["body", "engine_options"], request_issues, req.engine_options)
 
-        request_issues = engine.validate_options(req.engine_options, "generation")
-        if request_issues:
-            raise InvalidRequest.from_issues(["body", "engine_options"], request_issues, req.engine_options)
-
-        output_format = _first(
-            getattr(req, "output_format", None), p.get("output_format"), self.settings.effective("default_output_format")
-        )
-        # Profile engine_options are engine-specific; they only apply when routing stays on the profile voice's engine.
-        profile_options: dict[str, Any] = {}
-        if profile:
-            profile_voice = voice if voice_id == p["voice_id"] else self.store.get_voice(p["voice_id"])
-            if profile_voice and profile_voice["engine_id"] == engine.engine_id:
-                profile_options = p["engine_options"]
-        return self._plan(
-            chunks=chunks,
-            voice=voice,
-            engine=engine,
-            profile=profile,
-            speed=_first(req.speed, p.get("speed"), self.settings.effective("default_speed")),
-            volume=_first(req.volume, p.get("volume"), self.settings.effective("default_volume")),
-            output_format=output_format,
-            sample_rate=_first(req.sample_rate, p.get("sample_rate")),
-            option_layers=[voice["engine_options"], profile_options, req.engine_options],
-        )
+            output_format = _first(
+                getattr(req, "output_format", None),
+                p.get("output_format"),
+                self.settings.effective("default_output_format"),
+            )
+            # Profile engine_options are engine-specific; they only apply when routing stays on the profile voice's engine.
+            profile_options: dict[str, Any] = {}
+            if profile:
+                profile_voice = voice if voice_id == p["voice_id"] else self.store.get_voice(p["voice_id"])
+                if profile_voice and profile_voice["engine_id"] == engine.engine_id:
+                    profile_options = p["engine_options"]
+            return self._plan(
+                chunks=chunks,
+                voice=voice,
+                engine=engine,
+                profile=profile,
+                speed=_first(req.speed, p.get("speed"), self.settings.effective("default_speed")),
+                volume=_first(req.volume, p.get("volume"), self.settings.effective("default_volume")),
+                output_format=output_format,
+                sample_rate=_first(req.sample_rate, p.get("sample_rate")),
+                option_layers=[voice["engine_options"], profile_options, req.engine_options],
+                runtime=runtime,
+            )
+        except Exception:
+            self.engines.runtime.release(runtime)
+            raise
 
     def plan_voice_test(self, voice: dict[str, Any], req: VoiceTestRequest) -> GenerationPlan:
         chunks = self._check_text(req.text)
-        engine = self._route(voice, None)
-        issues = engine.validate_options(req.engine_options, "generation")
-        if issues:
-            raise InvalidRequest.from_issues(["body", "engine_options"], issues, req.engine_options)
-        return self._plan(
-            chunks=chunks,
-            voice=voice,
-            engine=engine,
-            profile=None,
-            speed=req.speed,
-            volume=req.volume,
-            output_format=req.output_format,
-            sample_rate=req.sample_rate,
-            option_layers=[voice["engine_options"], req.engine_options],
-        )
+        engine, runtime = self._route(voice, None)
+        try:
+            issues = engine.validate_options(req.engine_options, "generation")
+            if issues:
+                raise InvalidRequest.from_issues(["body", "engine_options"], issues, req.engine_options)
+            return self._plan(
+                chunks=chunks,
+                voice=voice,
+                engine=engine,
+                profile=None,
+                speed=req.speed,
+                volume=req.volume,
+                output_format=req.output_format,
+                sample_rate=req.sample_rate,
+                option_layers=[voice["engine_options"], req.engine_options],
+                runtime=runtime,
+            )
+        except Exception:
+            self.engines.runtime.release(runtime)
+            raise
 
     # -- synthesis ------------------------------------------------------------
 
@@ -235,9 +279,9 @@ class GenerationService:
         occur before the first block as normal JSON errors.
         """
         ref = plan.voice["engine_voice_ref"]
-        # Bind the request to one runtime record: reconfiguration mid-request swaps the
-        # active record but this request keeps its consistent engine instance.
-        runtime = self.engines.runtime.acquire(plan.engine.engine_id)
+        # The request is already bound to one runtime generation by plan(): synthesis
+        # runs against the same configuration snapshot that validation resolved.
+        runtime = plan.runtime
         try:
             for text in plan.chunks:
                 try:
@@ -251,7 +295,7 @@ class GenerationService:
                 except Exception as exc:  # noqa: BLE001
                     raise translate_engine_error(exc) from exc
         finally:
-            self.engines.runtime.release(runtime)
+            plan.release()
 
     def render(self, plan: GenerationPlan) -> tuple[bytes, str]:
         """Return the completed audio body and its media type.
@@ -264,14 +308,19 @@ class GenerationService:
         """
         limit = int(self.settings.effective("max_audio_bytes"))
         total, blocks = 0, []
-        for block in self.pcm_stream(plan):
-            total += len(block)
-            if total > limit:
-                raise PayloadTooLarge(
-                    f"generated audio exceeds the {limit}-byte limit",
-                    details={"limit_bytes": limit, "produced_bytes": total},
-                )
-            blocks.append(block)
+        try:
+            for block in self.pcm_stream(plan):
+                total += len(block)
+                if total > limit:
+                    raise PayloadTooLarge(
+                        f"generated audio exceeds the {limit}-byte limit",
+                        details={"limit_bytes": limit, "produced_bytes": total},
+                    )
+                blocks.append(block)
+        finally:
+            # Covers raises before first iteration and aborts that leave the stream
+            # suspended: the bound runtime is released without waiting for GC.
+            plan.release()
         pcm = b"".join(blocks)
         if plan.output_format == "wav":
             return wav_bytes(pcm, plan.sample_rate), "audio/wav"

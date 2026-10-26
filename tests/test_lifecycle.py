@@ -11,7 +11,9 @@ import numpy as np
 import pytest
 
 from conftest import FakeEngine, make_voice
-from opal_talk.tts.base import AudioChunk, EngineUnavailableError
+from opal_talk.schemas import GenerateRequest, VoiceTestRequest
+from opal_talk.service.errors import Conflict
+from opal_talk.tts.base import AudioChunk, EngineUnavailableError, VoiceResolutionError
 from opal_talk.tts.cache import ModelCache
 from opal_talk.tts.registry import EngineRegistry
 from opal_talk.tts.runtime import EngineRuntimeManager
@@ -386,3 +388,74 @@ def test_to_pcm16_byte_identical_output():
     samples = np.linspace(-1.2, 1.2, 4001, dtype=np.float32)
     expected = (np.clip(samples.astype(np.float32) * 0.5, -1.0, 1.0) * 32767.0).round().astype("<i2").tobytes()
     assert to_pcm16(samples, 0.5) == expected
+
+
+# -- plan-time runtime binding ------------------------------------------------------
+
+
+def test_plan_binds_runtime_generation_through_synthesis(config):
+    """A reconfigure between plan() and synthesis must not alter what the request
+    sees: plan() bound one generation and the new options apply only on drain."""
+    engine = FakeEngine("fake")
+    services = _services_with_engine(config, engine)
+    try:
+        seen: list[dict] = []
+        synthesize = engine.synthesize
+
+        def tracked(ref, text, speed, options):
+            seen.append(dict(engine.options))
+            yield from synthesize(ref, text, speed, options)
+
+        engine.synthesize = tracked
+        plan = _plan(services)
+        services.engines.runtime.swap("fake", {"tag": "B"})  # defers: the plan pins the old generation
+        blocks = list(services.generation.pcm_stream(plan))
+        assert blocks
+        assert "tag" not in seen[0]  # synthesis ran the generation bound at plan time
+        assert engine.options == {"tag": "B"}  # the newest config applied only after drain
+        assert_permits_free(services.engines.runtime, "fake")
+    finally:
+        services.close()
+
+
+def test_render_and_voice_test_share_bound_generation(config):
+    """The non-streaming and voice-test paths obey the same bound-generation rules."""
+    engine = FakeEngine("fake")
+    services = _services_with_engine(config, engine)
+    try:
+        seen: list[dict] = []
+        synthesize = engine.synthesize
+
+        def tracked(ref, text, speed, options):
+            seen.append(dict(engine.options))
+            yield from synthesize(ref, text, speed, options)
+
+        engine.synthesize = tracked
+        plan = _plan(services)
+        services.engines.runtime.swap("fake", {"tag": "B"})
+        data, _ = services.generation.render(plan)
+        assert data and "tag" not in seen[0]
+        # The drained swap applied B; a later voice-test binds the new generation.
+        _, data2, _ = services.generation.test_voice("v1", VoiceTestRequest())
+        assert data2 and seen[-1] == {"tag": "B"}
+        assert_permits_free(services.engines.runtime, "fake")
+    finally:
+        services.close()
+
+
+def test_failed_plan_releases_bound_runtime(config):
+    """A plan() that fails after acquiring the runtime binding releases it."""
+    engine = FakeEngine("fake")
+    services = _services_with_engine(config, engine)
+    try:
+        rec = services.engines.runtime._records["fake"]
+
+        def boom(ref, options):
+            raise VoiceResolutionError("nope", "voice_not_found")
+
+        engine.native_sample_rate = boom
+        with pytest.raises(Conflict):
+            services.generation.plan(GenerateRequest(text="hello", voice_id="v1"))
+        assert rec.refs == 0
+    finally:
+        services.close()

@@ -84,6 +84,10 @@ class EngineRuntime:
             self._held = False
             self._record.sem.release()
 
+    def detach(self) -> None:
+        """Detach the whole usage reference (permit + record ref); idempotent."""
+        self._mgr.release(self)
+
     def __enter__(self) -> EngineRuntime:
         return self if self._held else self.acquire()
 

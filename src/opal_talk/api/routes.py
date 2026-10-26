@@ -68,9 +68,10 @@ class _PcmBodyIterator:
     last resort for a response that is abandoned without unwinding its call path.
     """
 
-    def __init__(self, blocks, ctx: str):
+    def __init__(self, blocks, ctx: str, on_close=None):
         self._blocks = blocks
         self._ctx = ctx
+        self._on_close = on_close
         self._lock = threading.Lock()
         self._first: bytes | None = None
         self._first_pending = False
@@ -120,6 +121,13 @@ class _PcmBodyIterator:
                 self._blocks.close()
             except Exception:  # noqa: BLE001 - teardown failure must not mask the outcome
                 log.exception("failed to release audio stream resources (%s)", self._ctx)
+            try:
+                # The plan-bound runtime: released even when blocks.close() ran no
+                # generator body (never started) or raised.
+                if self._on_close is not None:
+                    self._on_close()
+            except Exception:  # noqa: BLE001
+                log.exception("failed to release the bound generation (%s)", self._ctx)
         if not self._completed and not self._failed:
             log.info("audio stream closed before completion (%s)", self._ctx)
 
@@ -323,7 +331,9 @@ async def generate_audio(body: GenerateRequest, svc: Services = Depends(services
              response_class=StreamingResponse)
 async def stream_audio(request: Request, body: GenerateStreamRequest, svc: Services = Depends(services)):
     plan = await run_in_threadpool(svc.generation.plan, body)
-    stream = _PcmBodyIterator(svc.generation.pcm_stream(plan), _correlation_context(request))
+    stream = _PcmBodyIterator(
+        svc.generation.pcm_stream(plan), _correlation_context(request), on_close=plan.release
+    )
     try:
         # Produce the first block before committing to 200 so early failures become JSON errors.
         first = await run_in_threadpool(stream.next_block)
