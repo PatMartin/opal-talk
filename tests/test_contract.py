@@ -14,17 +14,17 @@ from contract_check import METHODS, SPEC, _deref, check_response
 from fastapi.routing import APIRoute
 
 from conftest import ContractClient, make_profile, make_voice
+from opal_talk import __version__
 from opal_talk.api.routes import router
 from opal_talk.contract import CONTRACT_RESOURCE, contract_operations, load_contract
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# The implemented API is v1.0.0. Three byte-identical copies of it exist: the
+# The implemented API is v1.2.0. Three byte-identical copies of it exist: the
 # authoritative human-facing root file, a version-pinned sibling, and the packaged
-# copy that the service loads and serves at /openapi.json. opal_talk.1.2.0.yaml is
-# the future migration target (specs/opal_talk_1.2.0_migration.md) and must never
-# be selected as the active contract.
-ACTIVE_VERSION = "1.2.0"
+# copy that the service loads and serves at /openapi.json. opal_talk.1.0.0.yaml is
+# the superseded document and must never be selected as the active contract.
+ACTIVE_VERSION = __version__
 ROOT_CONTRACT = ROOT / "opal_talk.yaml"
 VERSIONED_CONTRACT = ROOT / f"opal_talk.{ACTIVE_VERSION}.yaml"
 PREVIOUS_CONTRACT = ROOT / "opal_talk.1.0.0.yaml"  # superseded; must never be selected
@@ -78,6 +78,20 @@ def test_load_contract_returns_valid_v1_document():
     assert spec["openapi"].startswith("3.")
     assert spec["info"]["version"] == ACTIVE_VERSION, "v1.2 contract must not be packaged silently"
     assert spec["paths"] and spec["components"]["schemas"]
+
+
+def test_package_metadata_version_matches_contract_version():
+    """pyproject metadata, `opal_talk.__version__` and the packaged OpenAPI document
+    must move together — a release bump that misses one is drift.
+
+    pyproject is read from the file rather than importlib.metadata: an editable
+    install snapshots the version at install time and stays stale after a bump.
+    """
+    import tomllib
+
+    pyproject = tomllib.loads(ROOT.joinpath("pyproject.toml").read_text(encoding="utf-8"))
+    assert pyproject["project"]["version"] == __version__
+    assert load_contract()["info"]["version"] == __version__
 
 
 class _UniqueKeyLoader(yaml.SafeLoader):

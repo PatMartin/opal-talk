@@ -24,7 +24,7 @@ jobs:
       - name: Editable install sanity (contract loads, entry points start)
         shell: bash
         run: |
-          python -c "from opal_talk.contract import load_contract, contract_operations; spec = load_contract(); assert spec['info']['version'] == '1.0.0' and contract_operations()"
+          python -c "from importlib.metadata import version; import opal_talk; from opal_talk.contract import load_contract, contract_operations; spec = load_contract(); assert spec['info']['version'] == version('opal-talk') == opal_talk.__version__ and contract_operations()"
           opal-talk-svc --help >/dev/null
           opal-talk --help >/dev/null
           opal --help >/dev/null
@@ -59,7 +59,7 @@ jobs:
         shell: bash
         run: |
           if [ -x .pkgenv/bin/python ]; then BIN=.pkgenv/bin; else BIN=.pkgenv/Scripts; fi
-          "$BIN/python" -c "from opal_talk.contract import load_contract, contract_operations; spec = load_contract(); assert spec['info']['version'] == '1.0.0'; assert contract_operations()"
+          "$BIN/python" -c "from importlib.metadata import version; import opal_talk; from opal_talk.contract import load_contract, contract_operations; spec = load_contract(); assert spec['info']['version'] == version('opal-talk') == opal_talk.__version__; assert contract_operations()"
           "$BIN/opal-talk-svc" --help >/dev/null
           "$BIN/opal-talk" --help >/dev/null
           "$BIN/opal" --help >/dev/null
