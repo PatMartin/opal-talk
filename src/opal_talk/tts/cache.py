@@ -109,12 +109,19 @@ class ModelCache:
             return entry
 
     def release(self, entry: CacheEntry) -> None:
-        """Drop a held reference; a stale entry is disposed at zero users."""
+        """Drop a held reference; a stale entry is disposed at zero users.
+
+        Disposal follows the entry, not the dict slot: an evicted entry whose key
+        a fresh generation already replaced is still disposed here exactly once.
+        """
         dispose = False
         with self._lock:
+            if entry.refs <= 0:
+                return  # over-release: nothing held
             entry.refs -= 1
-            if entry.evicted and entry.refs == 0 and self._entries.get(entry.key) is entry:
-                del self._entries[entry.key]
+            if entry.evicted and entry.refs == 0:
+                if self._entries.get(entry.key) is entry:
+                    del self._entries[entry.key]
                 dispose = True
         if dispose:
             self._dispose(entry)
