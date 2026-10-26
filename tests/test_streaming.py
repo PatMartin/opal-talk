@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import math
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 import pytest
@@ -198,3 +201,39 @@ def test_completed_stream_does_not_log_failure(client, voices, caplog):
         resp.read()
     logged = [r.getMessage() for r in caplog.records]
     assert not any("synthesis failure" in m or "closed before completion" in m for m in logged)
+
+
+def test_stream_at_capacity_returns_engine_unavailable(live_server, client, voices, engines, app):
+    """A stream request beyond capacity gets the JSON 503 before any audio byte."""
+    engine = engines[0]
+    entered, gate = threading.Event(), threading.Event()
+    synthesize = engine.synthesize
+
+    def gated(ref, text, speed, options):
+        entered.set()
+        gate.wait(30)
+        yield from synthesize(ref, text, speed, options)
+
+    engine.synthesize = gated
+    rec = app.state.services.runtime._records["fake"]
+    body = {"text": "hi.", "voice_id": "v1"}
+
+    def request():
+        with httpx.stream("POST", f"{live_server}/api/v1/generate/stream", json=body, timeout=30) as resp:
+            return resp.status_code, resp.read()
+
+    try:
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            first = pool.submit(request)
+            assert entered.wait(10)
+            queued = pool.submit(request)
+            assert _wait_until(lambda: rec.waiters == 1)
+            status, payload = pool.submit(request).result(10)
+            assert status == 503
+            assert json.loads(payload)["error"]["code"] == "engine_unavailable"
+            gate.set()
+            assert first.result(10)[0] == 200
+            assert queued.result(10)[0] == 200
+            assert rec.waiters == 0
+    finally:
+        gate.set()

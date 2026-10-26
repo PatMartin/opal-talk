@@ -198,3 +198,62 @@ def test_voice_test_endpoint(client, setup):
     assert client.post("/api/v1/voices/v1/test").status_code == 409
     client.patch("/api/v1/engines/fake", json={"options": {"available": False}})
     assert client.post("/api/v1/voices/v2/test").status_code == 503
+
+
+# -- bounded inference admission -------------------------------------------------------
+
+
+def _wait_until(predicate, timeout: float = 10.0) -> bool:
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.02)
+    return predicate()
+
+
+def test_generation_at_capacity_returns_engine_unavailable(live_server, client, setup, app):
+    """Default capacity is one inference: a holder plus one queued waiter fills
+    admission — further /generate, /generate/stream and voice-test requests get
+    the existing 503 engine_unavailable response, and the queued one proceeds."""
+    import json
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    import httpx
+
+    engine = setup
+    entered, gate = threading.Event(), threading.Event()
+    synthesize = engine.synthesize
+
+    def gated(ref, text, speed, options):
+        entered.set()
+        gate.wait(30)
+        yield from synthesize(ref, text, speed, options)
+
+    engine.synthesize = gated
+    rec = app.state.services.runtime._records["fake"]
+    body = {"text": "hi.", "voice_id": "v1"}
+    try:
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            post = lambda path: httpx.post(f"{live_server}{path}", json=body, timeout=30)  # noqa: E731
+            first = pool.submit(post, "/api/v1/generate")
+            assert entered.wait(10)  # holder has the only permit
+            queued = pool.submit(post, "/api/v1/generate")
+            assert _wait_until(lambda: rec.waiters == 1)  # queue slot full
+            resp = pool.submit(post, "/api/v1/generate").result(10)
+            assert resp.status_code == 503
+            assert resp.json()["error"]["code"] == "engine_unavailable"
+            resp = pool.submit(
+                lambda: httpx.post(f"{live_server}/api/v1/voices/v1/test", json={"text": "hi."}, timeout=30)
+            ).result(10)
+            assert resp.status_code == 503
+            assert json.loads(resp.content)["error"]["code"] == "engine_unavailable"
+            gate.set()
+            assert first.result(10).status_code == 200
+            assert queued.result(10).status_code == 200
+            assert rec.waiters == 0
+    finally:
+        gate.set()

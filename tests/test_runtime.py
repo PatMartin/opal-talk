@@ -458,3 +458,179 @@ def test_engine_update_rejects_invalid_limit(client):
     client.skip_contract = True
     resp = client.patch("/api/v1/engines/fake", json={"options": {"max_concurrent_inferences": 0}})
     assert resp.status_code == 422
+
+
+def _wait_for(predicate, timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+
+
+def test_rejection_is_immediate_and_leaves_no_waiter(manager):
+    """permits in flight + permits queued is the bound; the next caller is
+    rejected at once (no blocking) and leaves no waiter or permit behind."""
+    rec = manager._records["fake"]
+    held = manager.acquire("fake")
+    held.acquire()  # holds the single permit
+    rec_of_held = manager._records["fake"]
+
+    def queued() -> None:
+        with manager.using("fake"):
+            pass
+
+    t = threading.Thread(target=queued)
+    t.start()
+    _wait_for(lambda: rec_of_held.waiters == 1)
+    rt = manager.acquire("fake")  # binding is allowed; admission gates at enter
+    try:
+        started = time.monotonic()
+        with pytest.raises(EngineUnavailableError, match="at capacity"), rt:
+            pass
+        assert time.monotonic() - started < 1.0
+    finally:
+        manager.release(rt)
+    assert not rt._held and rec_of_held.waiters == 1  # only the queued thread remains
+    held.release()
+    manager.release(held)
+    t.join(5)
+    assert rec_of_held.waiters == 0 and rec_of_held.refs == 0
+    assert rec is rec_of_held
+
+
+def test_queued_waiter_acquires_capacity_when_it_frees(manager):
+    """A request waiting for a permit proceeds once the holder releases."""
+    engine = manager.get("fake")
+    rec = manager._records["fake"]
+    gate = threading.Event()
+    done: list[str] = []
+
+    def holder() -> None:
+        with manager.using("fake"):
+            gate.wait(5)
+
+    t1 = threading.Thread(target=holder)
+    t1.start()
+    time.sleep(0.05)
+    synthesize = engine.synthesize
+
+    def waiter() -> None:
+        with manager.using("fake") as e:
+            list(e.synthesize("tone-a", "x", 1.0, {}))
+            done.append("waiter")
+
+    engine.synthesize = synthesize
+    t2 = threading.Thread(target=waiter)
+    t2.start()
+    _wait_for(lambda: rec.waiters == 1)
+    assert done == []  # still queued
+    gate.set()
+    t1.join(5)
+    t2.join(5)
+    assert done == ["waiter"]
+    assert rec.waiters == 0 and rec.refs == 0
+
+
+def test_failed_inference_releases_permit_exactly_once(manager):
+    """An engine exception inside `with` frees the permit once: the semaphore
+    is fully available to the next caller and double-release is a no-op."""
+    rt = manager.acquire("fake")
+    with pytest.raises(Exception, match="synthetic failure"), rt:
+        list(rt.engine.synthesize("tone-a", "x", 1.0, {"fail_on_call": 1}))
+    assert not rt._held
+    rt.release()  # no permit was left held: a second release changes nothing
+    with manager.using("fake") as engine:  # would block if the permit leaked
+        assert engine.engine_id == "fake"
+    manager.release(rt)
+
+
+def test_permit_release_twice_cannot_over_release(manager):
+    rt = manager.acquire("fake")
+    rt.acquire()
+    rt.release()
+    rt.release()  # BoundedSemaphore raises if this actually released again
+    manager.release(rt)
+    assert manager._records["fake"].refs == 0
+
+
+def test_permit_waiter_uses_its_bound_generation(manager):
+    """A caller queued on the old record's semaphore still runs the bound
+    generation: the deferred reconfigure applies only after every bound user
+    drains."""
+    engine = manager.get("fake")
+    rec = manager._records["fake"]
+    seen: list[dict] = []
+    done = threading.Event()
+
+    holder = manager.acquire("fake")
+    holder.acquire()  # holds the only permit
+
+    def waiter() -> None:
+        with manager.using("fake"):
+            seen.append(dict(engine.options))
+            done.set()
+
+    t = threading.Thread(target=waiter)
+    t.start()
+    _wait_for(lambda: rec.waiters == 1)  # bound to gen0, queued on its semaphore
+    manager.configure("fake", {"tag": "B"})  # defers: gen0 still has bound users
+    holder.release()
+    manager.release(holder)
+    t.join(5)
+    assert done.is_set() and "tag" not in seen[0]  # waiter ran its bound generation
+    assert engine.options == {"tag": "B"}  # drain applied the new config last
+    assert rec.refs == 0
+
+
+def test_rejection_storm_stays_bounded_and_deadlock_free(manager):
+    """A burst of requests past capacity: waiters never exceed permits, every
+    request resolves (success or rejection), and nothing wedges."""
+    rec = manager._records["fake"]
+    gate = threading.Event()
+    holder = manager.acquire("fake")
+
+    def hold() -> None:
+        with holder:
+            gate.wait(10)
+
+    t = threading.Thread(target=hold)
+    t.start()
+    time.sleep(0.05)
+
+    results = {"ok": 0, "rejected": 0}
+    count_lock = threading.Lock()
+    peak = [0]
+    monitoring = threading.Event()
+
+    def monitor() -> None:
+        while not monitoring.is_set():
+            peak[0] = max(peak[0], rec.waiters)
+            time.sleep(0.002)
+
+    mon = threading.Thread(target=monitor, daemon=True)
+    mon.start()
+
+    def attempt() -> None:
+        try:
+            with manager.using("fake"), count_lock:
+                results["ok"] += 1
+        except EngineUnavailableError:
+            with count_lock:
+                results["rejected"] += 1
+
+    threads = [threading.Thread(target=attempt) for _ in range(20)]
+    for th in threads:
+        th.start()
+    _wait_for(lambda: rec.waiters >= 1)
+    gate.set()
+    for th in threads:
+        th.join(5)
+    monitoring.set()
+    mon.join(5)
+    t.join(5)
+    assert results["ok"] <= rec.permits  # only queue-capacity callers got in
+    assert results["ok"] + results["rejected"] == 20
+    assert peak[0] <= rec.permits
+    holder.release()
+    manager.release(holder)
+    assert rec.waiters == 0 and rec.refs == 0
