@@ -51,7 +51,9 @@ class _RuntimeRecord:
     waiters: int = 0
     refs: int = 0
     retired: bool = False
+    superseded: bool = False
     pending: _RuntimeRecord | None = None
+    prev: _RuntimeRecord | None = None
     ready: threading.Event = field(default_factory=threading.Event)
     failed: BaseException | None = None
 
@@ -63,13 +65,14 @@ class EngineRuntime:
     Enter it (`with rt:`) around adapter calls to take an inference permit — at most
     `record.permits` run concurrently, and at most `permits` more may queue before
     `EngineUnavailableError` rejects the request (bounded backpressure).
-    `release()` detaches the reference; release exactly once.
+    `release()` detaches the reference; detaching is idempotent.
     """
 
     engine: TtsEngine
     _record: _RuntimeRecord
     _mgr: EngineRuntimeManager
     _held: bool = False
+    _detached: bool = False
 
     def acquire(self) -> EngineRuntime:
         self._mgr._enter(self._record)
@@ -153,25 +156,35 @@ class EngineRuntimeManager:
         """Bind a usage reference to the current runtime record (KeyError if unknown).
 
         Blocks while the record's configuration is still pending application, and
-        raises `EngineUnavailableError` if that application failed.
+        raises `EngineUnavailableError` if that application failed. A binding that
+        lands on a superseded generation is dropped and re-bound to the current
+        record, so every waiter either proceeds or gets an explicit error.
         """
-        with self._guard:
-            rec = self._record(engine_id)
-            rec.refs += 1
-        rec.ready.wait()
-        if rec.failed is not None:
+        while True:
+            with self._guard:
+                rec = self._record(engine_id)
+                rec.refs += 1
+            rec.ready.wait()
+            if rec.failed is None:
+                return EngineRuntime(rec.engine, rec, self)
+            superseded = rec.superseded
             self.release(EngineRuntime(rec.engine, rec, self))
-            raise EngineUnavailableError(
-                f"engine '{engine_id}' reconfiguration failed: {rec.failed}"
-            ) from rec.failed
-        return EngineRuntime(rec.engine, rec, self)
+            if not superseded:
+                raise EngineUnavailableError(
+                    f"engine '{engine_id}' reconfiguration failed: {rec.failed}"
+                ) from rec.failed
+            # Superseded generation: re-bind the current record instead of failing.
 
     def release(self, runtime: EngineRuntime) -> None:
         """Detach a usage reference; applies a deferred reconfiguration on drain."""
         runtime.release()
+        if runtime._detached:
+            return
+        runtime._detached = True
         rec = runtime._record
         with self._guard:
-            rec.refs -= 1
+            if rec.refs > 0:
+                rec.refs -= 1
             pending = rec.pending if rec.retired and rec.refs == 0 else None
             if pending is not None:
                 rec.pending = None
@@ -195,16 +208,34 @@ class EngineRuntimeManager:
 
     # -- lifecycle -------------------------------------------------------------
 
+    @staticmethod
+    def _deepest_engaged(rec: _RuntimeRecord) -> _RuntimeRecord | None:
+        """Walk the predecessor chain for the oldest generation that is still live
+        (bound references) or whose configuration is still being applied (`ready`
+        unset). Generations share one engine instance, so any of them being live
+        means an immediate configure() would interrupt an in-flight request."""
+        target = None
+        while rec is not None:
+            if rec.refs > 0 or not rec.ready.is_set():
+                target = rec
+            rec = rec.prev
+        return target
+
     def swap(self, engine_id: str, options: dict[str, Any]) -> None:
         """Install a new configuration generation for `engine_id`.
 
-        No active users: applies immediately — a raise leaves the previous record
-        active and untouched. Active users: defers until they release.
+        Engine idle (no generation in the chain is live or activating): applies
+        immediately — a raise leaves the previous record active and untouched.
+        Engine in use: defers onto the deepest engaged generation; an earlier
+        pending generation is superseded deterministically — the newest deferred
+        configuration wins and the superseded one's waiters re-bind the current
+        record instead of failing or blocking forever.
         """
         adapter_options, _ = split_runtime_options(options)
         with self._guard:
             old = self._record(engine_id)
-            if old.refs == 0:
+            target = self._deepest_engaged(old)
+            if target is None:
                 old.engine.configure(adapter_options)  # raises with nothing swapped
             permits = self._limit(old.engine, options)
             new = _RuntimeRecord(
@@ -213,19 +244,23 @@ class EngineRuntimeManager:
                 options=dict(options),
                 sem=threading.BoundedSemaphore(permits),
                 permits=permits,
+                # Dead middle generations are skipped: only the engaged prefix of
+                # the chain can ever matter to a future drain.
+                prev=target,
             )
-            if old.refs == 0:
+            if target is None:
                 new.ready.set()
             else:
-                old.retired = True
-                if old.pending is not None:
-                    # A second reconfigure supersedes the pending generation: wake its
-                    # waiters with a failure instead of leaving them blocked forever.
-                    old.pending.failed = EngineUnavailableError(
+                target.retired = True
+                superseded = target.pending
+                target.pending = new
+                if superseded is not None:
+                    superseded.retired = True
+                    superseded.superseded = True
+                    superseded.failed = EngineUnavailableError(
                         f"engine '{engine_id}' configuration superseded"
                     )
-                    old.pending.ready.set()
-                old.pending = new
+                    superseded.ready.set()
             self._records[engine_id] = new
 
     def configure(self, engine_id: str, options: dict[str, Any]) -> None:

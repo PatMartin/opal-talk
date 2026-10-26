@@ -189,6 +189,138 @@ def test_synthesis_uninterrupted_by_reconfigure(manager):
     assert engine.options["available"] is False  # new options applied only after drain
 
 
+# -- chained reconfiguration -------------------------------------------------------
+
+
+def test_second_reconfigure_defers_instead_of_applying_mid_request(manager):
+    """Swap B while a request still holds the previous generation: it must neither
+    configure the shared engine mid-request nor be clobbered by the stale pending A."""
+    engine = manager.get("fake")
+    seen: list[dict] = []
+    entered, proceed = threading.Event(), threading.Event()
+
+    def generate() -> None:
+        rt = manager.acquire("fake")
+        try:
+            with rt:
+                entered.set()
+                proceed.wait(10)
+                seen.append(dict(rt.engine.options))
+                list(rt.engine.synthesize("tone-a", "x", 1.0, {}))
+        finally:
+            manager.release(rt)
+
+    t = threading.Thread(target=generate)
+    t.start()
+    assert entered.wait(5)
+    manager.configure("fake", {"available": False, "tag": "A"})  # deferred onto the live generation
+    manager.configure("fake", {"tag": "B"})  # chained: must also defer, not apply now
+    assert "tag" not in engine.options  # the live request's config is untouched
+    proceed.set()
+    t.join(5)
+    assert seen and "tag" not in seen[0]  # the request saw its bound generation
+    # Deterministic supersession: the newest deferred configuration wins on drain.
+    assert engine.options == {"tag": "B"}
+    assert manager._records["fake"].refs == 0
+
+
+def test_three_rapid_reconfigures_newest_wins(manager):
+    """A -> B -> C while busy: only C is ever applied to the engine."""
+    engine = manager.get("fake")
+    applied: list[dict] = []
+    orig = engine.configure
+
+    def recording(options):
+        applied.append(dict(options))
+        orig(options)
+
+    engine.configure = recording
+    rt = manager.acquire("fake")
+    manager.configure("fake", {"tag": "A"})
+    manager.configure("fake", {"tag": "B"})
+    manager.configure("fake", {"tag": "C"})
+    manager.release(rt)
+    assert applied == [{"tag": "C"}]
+    assert engine.options == {"tag": "C"}
+    assert manager._records["fake"].refs == 0
+
+
+def test_waiter_rebinds_through_rapid_supersessions(manager):
+    """A waiter bound to a pending generation survives two supersessions and lands
+    on the newest generation — it proceeds, it is not left blocked or failed."""
+    engine = manager.get("fake")
+    rt = manager.acquire("fake")
+    acquired: list[EngineRuntime] = []
+    errors: list[Exception] = []
+
+    def waiter() -> None:
+        try:
+            acquired.append(manager.acquire("fake"))
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    manager.configure("fake", {"tag": "A"})  # deferred: waiters bind the pending record
+    t = threading.Thread(target=waiter)
+    t.start()
+    time.sleep(0.1)  # let the waiter bind the pending generation first
+    manager.configure("fake", {"tag": "B"})  # supersedes A's generation
+    manager.configure("fake", {"tag": "C"})  # supersedes B's generation
+    manager.release(rt)
+    t.join(5)
+    assert errors == [], errors
+    rt2 = acquired[0]
+    try:
+        with rt2:
+            list(rt2.engine.synthesize("tone-a", "x", 1.0, {}))
+    finally:
+        manager.release(rt2)
+    assert engine.options == {"tag": "C"}
+    assert manager._records["fake"].refs == 0
+
+
+def test_failed_chained_apply_surfaces_an_explicit_error(manager):
+    """A deferred configure() that fails wakes the newest generation's waiters
+    with a reconfiguration error instead of blocking them."""
+    manager = EngineRuntimeManager(EngineRegistry([ConfigBoomEngine("fake")]))
+    rt = manager.acquire("fake")
+    manager.configure("fake", {"boom": True})  # deferred
+    manager.configure("fake", {"tag": "C"})  # supersedes the doomed pending record
+    manager.release(rt)
+    # C's generation activated cleanly on drain — the doomed A never applied.
+    assert manager.get("fake").options == {"tag": "C"}
+    with manager.using("fake") as engine:
+        assert engine.options == {"tag": "C"}
+
+
+def test_failed_deferred_apply_wakes_bound_waiters():
+    manager = EngineRuntimeManager(EngineRegistry([ConfigBoomEngine("fake")]))
+    rt = manager.acquire("fake")
+    manager.configure("fake", {"boom": True})  # deferred; configure() raises on drain
+    got: list[Exception] = []
+
+    def waiter() -> None:
+        try:
+            manager.acquire("fake")
+        except Exception as exc:  # noqa: BLE001
+            got.append(exc)
+
+    t = threading.Thread(target=waiter)
+    t.start()
+    time.sleep(0.1)
+    manager.release(rt)
+    t.join(5)
+    assert len(got) == 1
+    assert isinstance(got[0], EngineUnavailableError) and "reconfiguration failed" in str(got[0])
+
+
+def test_double_release_is_idempotent(manager):
+    """A second detach must not drive the record's reference count negative."""
+    rt = manager.acquire("fake")
+    manager.release(rt)
+    manager.release(rt)
+    assert manager._records["fake"].refs == 0
+
+
 def test_update_rolls_back_runtime_when_store_write_fails(config, monkeypatch):
     from opal_talk.service.container import build_services
 
