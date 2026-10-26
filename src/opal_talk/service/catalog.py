@@ -86,8 +86,16 @@ class EngineService:
             if issues:
                 raise InvalidRequest.from_issues(["body", "options"], issues, options)
         enabled = changes.get("enabled", state["enabled"])
-        self.store.upsert_engine_state(engine_id, enabled, options)
-        self.runtime.configure(engine_id, options)
+        # Reconfigure before the DB write: a failed configure leaves persisted state
+        # untouched; a failed write rolls the swap back so the two never diverge.
+        if "options" in changes:
+            self.runtime.swap(engine_id, options)
+        try:
+            self.store.upsert_engine_state(engine_id, enabled, options)
+        except Exception:
+            if "options" in changes:
+                self.runtime.swap(engine_id, state["options"])
+            raise
         return self.read(engine)
 
     def validate(self, engine_id: str) -> Report:

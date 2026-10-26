@@ -237,7 +237,9 @@ class CandidateService:
         for engine in self.engines.runtime.all():
             state = self.store.get_engine_state(engine.engine_id)
             if state is not None:
-                engine.configure(state["options"])
+                # Same lifecycle rules as a single-engine update: build the replacement
+                # off the active path, swap, and let in-flight requests drain.
+                self.engines.runtime.configure(engine.engine_id, state["options"])
 
     def summary(self, cand: Candidate) -> str:
         return _apply_summary(cand)

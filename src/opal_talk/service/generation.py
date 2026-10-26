@@ -235,16 +235,22 @@ class GenerationService:
         occur before the first block as normal JSON errors.
         """
         ref = plan.voice["engine_voice_ref"]
-        for text in plan.chunks:
-            try:
-                with self.engines.runtime.using(plan.engine.engine_id) as engine:
-                    pieces = list(engine.synthesize(ref, text, plan.speed, plan.options))
-            except Exception as exc:  # noqa: BLE001
-                raise translate_engine_error(exc) from exc
-            for piece in pieces:
-                samples = resample(piece.samples, piece.sample_rate, plan.sample_rate)
-                if samples.size:
-                    yield to_pcm16(samples, plan.volume)
+        # Bind the request to one runtime record: reconfiguration mid-request swaps the
+        # active record but this request keeps its consistent engine instance.
+        runtime = self.engines.runtime.acquire(plan.engine.engine_id)
+        try:
+            for text in plan.chunks:
+                try:
+                    with runtime:
+                        pieces = list(runtime.engine.synthesize(ref, text, plan.speed, plan.options))
+                except Exception as exc:  # noqa: BLE001
+                    raise translate_engine_error(exc) from exc
+                for piece in pieces:
+                    samples = resample(piece.samples, piece.sample_rate, plan.sample_rate)
+                    if samples.size:
+                        yield to_pcm16(samples, plan.volume)
+        finally:
+            self.engines.runtime.release(runtime)
 
     def render(self, plan: GenerationPlan) -> tuple[bytes, str]:
         """Return the completed audio body and its media type."""
