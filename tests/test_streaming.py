@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import sys
 import time
 
 import httpx
@@ -12,6 +13,19 @@ from contract_check import check_response
 from conftest import make_profile, make_voice
 
 SENTENCES = " ".join(f"This is sentence number {i}." for i in range(6))
+
+
+def _runtime_refs(app, engine_id: str = "fake") -> int:
+    return app.state.services.runtime._records[engine_id].refs
+
+
+def _wait_until(predicate, timeout: float = 10.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.02)
+    return predicate()
 
 
 @pytest.fixture
@@ -109,3 +123,78 @@ def test_failure_after_start_terminates_stream(live_server, client, voices):
         for chunk in resp.iter_raw():
             received += len(chunk)
     assert received > 0
+
+
+# -- stream failure handling and cleanup --------------------------------------------
+
+
+def test_failure_before_first_block_is_json_and_releases(client, voices, app):
+    """A synthesis failure before 200 is a JSON error and frees the engine binding."""
+    body = {"text": "x", "voice_id": "v1", "engine_options": {"fail_on_call": 1}}
+    resp = client.post("/api/v1/generate/stream", json=body)
+    assert resp.status_code == 500
+    assert resp.headers["content-type"] == "application/json"
+    assert resp.json()["error"]["code"] == "generation_failed"
+    assert _wait_until(lambda: _runtime_refs(app) == 0)
+
+
+def test_failure_after_first_block_terminates_and_logs(client, voices, app, caplog):
+    """A synthesis failure after 200 terminates the stream (contract) and is logged
+    with the request's correlation identifiers."""
+    body = {"text": SENTENCES, "voice_id": "v1", "engine_options": {"fail_on_call": 2}}
+    with client.stream("POST", "/api/v1/generate/stream",
+                       json=body, headers={"X-Opal-Request-Id": "req-stream-fail"}) as resp:
+        assert resp.status_code == 200
+        assert resp.headers["x-opal-request-id"] == "req-stream-fail"
+        it = resp.iter_raw()
+        assert next(it)  # the first block arrived intact
+        # Premature termination: the stream is torn down rather than receiving an
+        # error object injected into the byte stream.
+        with pytest.raises(RuntimeError, match="response already started"):
+            next(it)
+    assert _wait_until(lambda: _runtime_refs(app) == 0)
+    logged = [r.getMessage() for r in caplog.records if r.levelname in ("WARNING", "ERROR")]
+    assert any("synthesis failure" in m and "req-stream-fail" in m for m in logged), logged
+
+
+def test_early_close_releases_generator_and_permit(client, voices, app):
+    """Abandoning a live response frees the runtime reference and inference permit."""
+    rec = app.state.services.runtime._records["fake"]
+    body = {"text": SENTENCES, "voice_id": "v1", "engine_options": {"delay": 0.02}}
+    with client.stream("POST", "/api/v1/generate/stream", json=body) as resp:
+        assert resp.status_code == 200
+        assert next(resp.iter_raw())
+        assert rec.refs == 1
+    assert _wait_until(lambda: rec.refs == 0)
+    # The released permit lets the next request run normally.
+    assert client.post("/api/v1/generate", json={"text": "ok", "voice_id": "v1"}).status_code == 200
+
+
+def test_close_tolerates_engine_teardown_failure(client, voices, engines, app, monkeypatch):
+    """A teardown error inside the engine generator is reported, not fatal to cleanup."""
+    unraisable: list[BaseException] = []
+    monkeypatch.setattr(sys, "unraisablehook", lambda u: unraisable.append(u.exc_value))
+    engine = engines[0]
+    synthesize = engine.synthesize
+
+    def flaky(ref, text, speed, options):
+        try:
+            yield from synthesize(ref, text, speed, options)
+        except GeneratorExit:
+            raise RuntimeError("engine teardown failed")
+
+    engine.synthesize = flaky
+    rec = app.state.services.runtime._records["fake"]
+    with client.stream("POST", "/api/v1/generate/stream", json={"text": SENTENCES, "voice_id": "v1"}) as resp:
+        assert next(resp.iter_raw())
+    assert _wait_until(lambda: rec.refs == 0)
+    assert any(isinstance(e, RuntimeError) and "teardown" in str(e) for e in unraisable)
+
+
+def test_completed_stream_does_not_log_failure(client, voices, caplog):
+    """Normal end-of-stream is distinguished from failures: no warning is logged."""
+    with client.stream("POST", "/api/v1/generate/stream", json={"text": SENTENCES, "voice_id": "v1"}) as resp:
+        assert resp.status_code == 200
+        resp.read()
+    logged = [r.getMessage() for r in caplog.records]
+    assert not any("synthesis failure" in m or "closed before completion" in m for m in logged)

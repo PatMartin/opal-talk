@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import logging
+import threading
 from typing import Any
 
+import anyio
 from fastapi import APIRouter, Body, Depends, Header, Path, Query, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
+from starlette.concurrency import run_in_threadpool
 
 from opal_talk import API_VERSION, SERVICE_NAME, __version__
+from opal_talk.api.correlation import correlation_ids
 from opal_talk.schemas import (
     BackupCreateResponse,
     BackupRead,
@@ -39,6 +43,111 @@ from opal_talk.service.container import Services
 from opal_talk.tts.base import Report
 
 router = APIRouter()
+
+log = logging.getLogger(__name__)
+
+
+def _correlation_context(request: Request) -> str:
+    """Flatten the request's correlation identifiers for log records."""
+    ids = correlation_ids(request)
+    if ids is None:
+        return "request_id=unknown"
+    parts = [f"request_id={ids.request_id}", f"transaction_id={ids.transaction_id}"]
+    if ids.session_id:
+        parts.append(f"session_id={ids.session_id}")
+    if ids.causation_id:
+        parts.append(f"causation_id={ids.causation_id}")
+    return " ".join(parts)
+
+
+class _PcmBodyIterator:
+    """Async iterator feeding the synchronous PCM generator of one stream request.
+
+    `close()` — serialized with in-flight reads — is the single release path for the
+    generator's runtime reference and inference permit. `__del__` schedules it as the
+    last resort for a response that is abandoned without unwinding its call path.
+    """
+
+    def __init__(self, blocks, ctx: str):
+        self._blocks = blocks
+        self._ctx = ctx
+        self._lock = threading.Lock()
+        self._first: bytes | None = None
+        self._first_pending = False
+        self._completed = False
+        self._failed = False
+        self._closed = False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self) -> bytes:
+        if self._first_pending:
+            self._first_pending = False
+            if self._first is not None:
+                return self._first
+        try:
+            block = await run_in_threadpool(self.next_block)
+        except Exception:
+            # A synthesis failure after 200: the contract terminates the stream
+            # rather than injecting an error object into the byte stream.
+            self._failed = True
+            log.warning("audio stream terminated by synthesis failure (%s)", self._ctx, exc_info=True)
+            raise
+        if block is None:
+            self._completed = True
+            log.debug("audio stream completed (%s)", self._ctx)
+            raise StopAsyncIteration
+        return block
+
+    def prime(self, first: bytes | None) -> None:
+        """Seed the block already produced while deciding whether 200 is commitable."""
+        self._first = first
+        self._first_pending = True
+
+    def next_block(self) -> bytes | None:
+        with self._lock:
+            if self._closed:
+                return None
+            return next(self._blocks, None)
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            try:
+                self._blocks.close()
+            except Exception:  # noqa: BLE001 - teardown failure must not mask the outcome
+                log.exception("failed to release audio stream resources (%s)", self._ctx)
+        if not self._completed and not self._failed:
+            log.info("audio stream closed before completion (%s)", self._ctx)
+
+    def __del__(self):
+        # Off the caller's thread: teardown may have to wait out an in-flight engine call.
+        try:
+            if not self._closed:
+                threading.Thread(target=self.close, name="opal-stream-close", daemon=True).start()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+class _PcmStreamResponse(StreamingResponse):
+    """StreamingResponse that releases the PCM generator when the response ends."""
+
+    def __init__(self, stream: _PcmBodyIterator, **kwargs):
+        super().__init__(stream, **kwargs)
+        self._stream = stream
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            # Every exit — completed, failed, disconnected or externally cancelled —
+            # unwinds through here, so the runtime reference and inference permit are
+            # released deterministically instead of relying on garbage collection.
+            with anyio.CancelScope(shield=True):
+                await run_in_threadpool(self._stream.close)
 
 ProfileId = Path(ge=1, description="Numeric profile identifier.")
 BackupFilename = Path(min_length=1, max_length=255, pattern=r"^[^/\\]+$")
@@ -212,20 +321,18 @@ async def generate_audio(body: GenerateRequest, svc: Services = Depends(services
 
 @router.post("/api/v1/generate/stream", tags=["generate"], operation_id="stream_audio_api_v1_generate_stream_post",
              response_class=StreamingResponse)
-async def stream_audio(body: GenerateStreamRequest, svc: Services = Depends(services)):
+async def stream_audio(request: Request, body: GenerateStreamRequest, svc: Services = Depends(services)):
     plan = await run_in_threadpool(svc.generation.plan, body)
-    blocks = svc.generation.pcm_stream(plan)
-    # Produce the first block before committing to 200 so early failures become JSON errors.
-    first = await run_in_threadpool(next, blocks, None)
-
-    async def body_iter():
-        if first is None:
-            return
-        yield first
-        async for block in iterate_in_threadpool(blocks):
-            yield block
-
-    return StreamingResponse(body_iter(), media_type="application/octet-stream", headers=plan.headers("pcm"))
+    stream = _PcmBodyIterator(svc.generation.pcm_stream(plan), _correlation_context(request))
+    try:
+        # Produce the first block before committing to 200 so early failures become JSON errors.
+        first = await run_in_threadpool(stream.next_block)
+    except BaseException:
+        with anyio.CancelScope(shield=True):
+            await run_in_threadpool(stream.close)
+        raise
+    stream.prime(first)
+    return _PcmStreamResponse(stream, media_type="application/octet-stream", headers=plan.headers("pcm"))
 
 
 # -- settings --------------------------------------------------------------------
