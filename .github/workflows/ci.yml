@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   python:
@@ -63,6 +64,28 @@ jobs:
           "$BIN/opal-talk-svc" --help >/dev/null
           "$BIN/opal-talk" --help >/dev/null
           "$BIN/opal" --help >/dev/null
+
+  engines:
+    name: release validation (real engines, manual)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install with Piper runtime
+        run: pip install -e ".[piper,dev]"
+      - name: Download public Piper voice (en_US-amy-low, ~25MB)
+        run: |
+          mkdir -p piper/voices
+          BASE=https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/amy/low
+          curl -fL "$BASE/en_US-amy-low.onnx" -o piper/voices/en_US-amy-low.onnx
+          curl -fL "$BASE/en_US-amy-low.onnx.json" -o piper/voices/en_US-amy-low.onnx.json
+      - name: Release validation (piper)
+        env:
+          OPAL_TALK_TEST_PIPER_MODEL: ${{ github.workspace }}/piper/voices/en_US-amy-low.onnx
+        run: pytest -m piper tests/ -v -s
 
   spa:
     name: spa
