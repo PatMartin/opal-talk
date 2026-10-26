@@ -19,7 +19,7 @@ from opal_talk.service.errors import (
     Unavailable,
 )
 from opal_talk.service.settings import SettingsService
-from opal_talk.tts.audio import resample, to_pcm16, wav_bytes
+from opal_talk.tts.audio import WAV_HEADER_BYTES, resample, to_pcm16, wav_bytes
 from opal_talk.tts.base import (
     EngineOptionsError,
     EngineUnavailableError,
@@ -300,18 +300,24 @@ class GenerationService:
     def render(self, plan: GenerationPlan) -> tuple[bytes, str]:
         """Return the completed audio body and its media type.
 
-        Non-streaming responses must buffer the whole output; the accumulated PCM is
-        bounded by the `max_audio_bytes` setting — exceeding it aborts early (the
-        abandoned stream releases its runtime reference and inference permit) and
-        returns 413 instead of growing memory unboundedly. `pcm_stream`, used by
-        /generate/stream, emits each block incrementally and has no such bound.
+        `max_audio_bytes` bounds the *encoded response body* — the bytes actually
+        sent to the client. For PCM output that is the raw S16LE payload; for WAV
+        it is the payload plus the fixed 44-byte container header, so the PCM
+        budget is reduced by `WAV_HEADER_BYTES`. Non-streaming responses must
+        buffer the whole output; accumulation stays bounded by the limit and an
+        oversized result aborts early (the abandoned stream releases its runtime
+        reference and inference permit) with 413 instead of growing memory
+        unboundedly. `pcm_stream`, used by /generate/stream, emits each block
+        incrementally and is governed by text and runtime resource limits —
+        `max_text_chars`, inference permits — not this output-size limit.
         """
         limit = int(self.settings.effective("max_audio_bytes"))
+        pcm_budget = limit - (WAV_HEADER_BYTES if plan.output_format == "wav" else 0)
         total, blocks = 0, []
         try:
             for block in self.pcm_stream(plan):
                 total += len(block)
-                if total > limit:
+                if total > pcm_budget:
                     raise PayloadTooLarge(
                         f"generated audio exceeds the {limit}-byte limit",
                         details={"limit_bytes": limit, "produced_bytes": total},

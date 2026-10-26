@@ -12,7 +12,7 @@ import pytest
 
 from conftest import FakeEngine, make_voice
 from opal_talk.schemas import GenerateRequest, VoiceTestRequest
-from opal_talk.service.errors import Conflict
+from opal_talk.service.errors import Conflict, PayloadTooLarge
 from opal_talk.tts.base import AudioChunk, EngineUnavailableError, VoiceResolutionError
 from opal_talk.tts.cache import ModelCache
 from opal_talk.tts.registry import EngineRegistry
@@ -378,6 +378,58 @@ def test_render_rejects_audio_beyond_max_buffer(client):
         assert r.status_code == 200
     # The aborted render released everything: the next request works normally.
     assert client.post("/api/v1/generate", json={"text": "ok", "voice_id": "v1"}).status_code == 200
+
+
+def _plan_sized(services, text, output_format="pcm"):
+    from opal_talk.schemas import GenerateRequest
+
+    return services.generation.plan(GenerateRequest(text=text, voice_id="v1", output_format=output_format))
+
+
+def test_max_audio_bytes_applies_at_exact_pcm_limit(config):
+    """max_audio_bytes bounds the encoded response body: PCM equal to the limit is served."""
+    services = _services_with_engine(config, FakeEngine("fake"))
+    try:
+        plan = _plan_sized(services, "x" * 150)  # 33075 samples -> 66150 PCM bytes
+        services.store.upsert_setting("max_audio_bytes", "66150")
+        data, media_type = services.generation.render(plan)
+        assert media_type == "application/octet-stream" and len(data) == 66150
+    finally:
+        services.close()
+
+
+def test_max_audio_bytes_rejects_one_byte_over_pcm(config):
+    services = _services_with_engine(config, FakeEngine("fake"))
+    try:
+        plan = _plan_sized(services, "x" * 150)
+        services.store.upsert_setting("max_audio_bytes", "66149")
+        with pytest.raises(PayloadTooLarge):
+            services.generation.render(plan)
+    finally:
+        services.close()
+
+
+def test_max_audio_bytes_counts_wav_container_overhead(config):
+    """A WAV response must fit the SAME encoded-body limit: the 44-byte header
+    counts, so the identical audio fits at limit+44 but not at limit+43."""
+    services = _services_with_engine(config, FakeEngine("fake"))
+    try:
+        services.store.upsert_setting("max_audio_bytes", "66194")  # 66150 PCM + 44 header
+        plan = _plan_sized(services, "x" * 150, output_format="wav")
+        data, media_type = services.generation.render(plan)
+        assert media_type == "audio/wav" and len(data) == 66194
+        import io
+        import wave
+
+        with wave.open(io.BytesIO(data)) as w:
+            assert w.getframerate() == 22050 and w.getnframes() == 33075
+
+        services.store.upsert_setting("max_audio_bytes", "66193")  # one byte short of the encoded size
+        plan = _plan_sized(services, "x" * 150, output_format="wav")
+        with pytest.raises(PayloadTooLarge):
+            services.generation.render(plan)
+    finally:
+        services.close()
 
 
 def test_to_pcm16_byte_identical_output():

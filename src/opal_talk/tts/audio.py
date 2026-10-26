@@ -11,6 +11,9 @@ from scipy.signal import resample_poly
 
 SAMPLE_WIDTH = 2
 CHANNELS = 1
+# Fixed container overhead of the WAV encoding produced by wav_bytes():
+# RIFF header (12) + fmt chunk (24) + data chunk header (8) for mono S16LE.
+WAV_HEADER_BYTES = 44
 
 
 def resample(samples: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray:
