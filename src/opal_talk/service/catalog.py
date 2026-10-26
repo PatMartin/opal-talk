@@ -9,7 +9,7 @@ from opal_talk.persistence.store import Store, now_iso
 from opal_talk.schemas import ProfileCreate, ProfileUpdate, VoiceCreate, VoiceUpdate
 from opal_talk.service.errors import Conflict, InvalidRequest, NotFound
 from opal_talk.tts.base import EngineUnavailableError, Issue, Report, TtsEngine, VoiceResolutionError
-from opal_talk.tts.registry import EngineRegistry
+from opal_talk.tts.runtime import EngineRuntimeManager
 
 log = logging.getLogger(__name__)
 
@@ -26,13 +26,13 @@ def merge_patch(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
 
 
 class EngineService:
-    def __init__(self, store: Store, registry: EngineRegistry):
+    def __init__(self, store: Store, runtime: EngineRuntimeManager):
         self.store = store
-        self.registry = registry
+        self.runtime = runtime
 
     def bootstrap(self, seed: dict[str, dict[str, Any]]) -> None:
         """Create persisted state for newly discovered engines and push options into adapters."""
-        for engine in self.registry.all():
+        for engine in self.runtime.all():
             state = self.store.get_engine_state(engine.engine_id)
             if state is None:
                 cfg = seed.get(engine.engine_id, {})
@@ -41,15 +41,14 @@ class EngineService:
                 state = self.store.get_engine_state(engine.engine_id)
             self.apply(engine, state["options"])
 
-    @staticmethod
-    def apply(engine: TtsEngine, options: dict[str, Any]) -> None:
+    def apply(self, engine: TtsEngine, options: dict[str, Any]) -> None:
         issues = engine.validate_options(options, "engine")
         if issues:
             log.warning("engine %s has invalid options: %s", engine.engine_id, [i.message for i in issues])
-        engine.configure(options)
+        self.runtime.configure(engine.engine_id, options)
 
     def engine(self, engine_id: str) -> TtsEngine:
-        engine = self.registry.get(engine_id)
+        engine = self.runtime.get(engine_id)
         if engine is None:
             raise NotFound(f"engine '{engine_id}' not found", "engine_not_found", {"engine_id": engine_id})
         return engine
@@ -72,7 +71,7 @@ class EngineService:
         }
 
     def list(self) -> list[dict[str, Any]]:
-        return [self.read(e) for e in self.registry.all()]
+        return [self.read(e) for e in self.runtime.all()]
 
     def get(self, engine_id: str) -> dict[str, Any]:
         return self.read(self.engine(engine_id))
@@ -88,7 +87,7 @@ class EngineService:
                 raise InvalidRequest.from_issues(["body", "options"], issues, options)
         enabled = changes.get("enabled", state["enabled"])
         self.store.upsert_engine_state(engine_id, enabled, options)
-        engine.configure(options)
+        self.runtime.configure(engine_id, options)
         return self.read(engine)
 
     def validate(self, engine_id: str) -> Report:
@@ -100,7 +99,7 @@ class EngineService:
 
     def usability_problem(self, engine_id: str) -> tuple[str, str] | None:
         """Return (code, message) if generation cannot be routed to this engine."""
-        engine = self.registry.get(engine_id)
+        engine = self.runtime.get(engine_id)
         if engine is None:
             return "engine_not_found", f"engine '{engine_id}' is not installed"
         if not self.state(engine_id)["enabled"]:
@@ -211,7 +210,7 @@ class VoiceService:
 
     def validate(self, voice_id: str) -> Report:
         voice = self.get(voice_id)
-        engine = self.engines.registry.get(voice["engine_id"])
+        engine = self.engines.runtime.get(voice["engine_id"])
         if engine is None:
             return Report(errors=[Issue("engine_not_found", f"engine '{voice['engine_id']}' is not installed", "engine_id")])
         report = engine.validate_voice(voice["engine_voice_ref"], voice["engine_options"])
@@ -244,7 +243,7 @@ class ProfileService:
         return voice
 
     def _check_options(self, voice: dict[str, Any], options: dict[str, Any]) -> None:
-        engine = self.engines.registry.get(voice["engine_id"])
+        engine = self.engines.runtime.get(voice["engine_id"])
         if engine is None:
             return
         issues = engine.validate_options(options, "generation")

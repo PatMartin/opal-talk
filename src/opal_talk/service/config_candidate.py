@@ -93,7 +93,7 @@ class CandidateService:
 
         engine_states = {s["engine_id"]: s for s in self.store.list_engine_states()}
         for engine_id, state in (cand.engines or {}).items():
-            engine = self.engines.registry.get(engine_id)
+            engine = self.engines.runtime.get(engine_id)
             if engine is None:
                 report.warnings.append(
                     Issue("engine_not_installed", f"engine '{engine_id}' is not installed; its configuration is ignored",
@@ -102,7 +102,7 @@ class CandidateService:
                 continue
             engine_states[engine_id] = {"engine_id": engine_id, **state}
         for engine_id, state in engine_states.items():
-            engine = self.engines.registry.get(engine_id)
+            engine = self.engines.runtime.get(engine_id)
             if engine is None:
                 continue
             for issue in engine.validate_options(state["options"], "engine"):
@@ -119,7 +119,7 @@ class CandidateService:
                 report.errors.append(Issue("duplicate_voice", f"voice '{vid}' is defined more than once", field))
                 continue
             seen.add(vid)
-            engine = self.engines.registry.get(voice["engine_id"])
+            engine = self.engines.runtime.get(voice["engine_id"])
             if engine is None:
                 report.errors.append(
                     Issue("engine_not_found", f"voice '{vid}' references unknown engine '{voice['engine_id']}'",
@@ -170,7 +170,7 @@ class CandidateService:
             if profile.get("is_active") and not voice.get("enabled", True):
                 report.warnings.append(Issue("voice_disabled", f"active profile uses disabled voice '{voice['voice_id']}'",
                                              f"{field}.voice_id"))
-            engine = self.engines.registry.get(voice["engine_id"])
+            engine = self.engines.runtime.get(voice["engine_id"])
             if engine is not None:
                 for issue in engine.validate_options(profile.get("engine_options") or {}, "generation"):
                     report.errors.append(Issue(issue.code, issue.message, f"{field}.engine_options.{issue.field}"))
@@ -199,7 +199,7 @@ class CandidateService:
     def apply(self, cand: Candidate, descriptions: dict[str, dict]) -> None:
         engines = None
         if cand.engines is not None:
-            engines = {k: v for k, v in cand.engines.items() if self.engines.registry.get(k) is not None}
+            engines = {k: v for k, v in cand.engines.items() if self.engines.runtime.get(k) is not None}
         voices = None
         if cand.voices is not None:
             voices = []
@@ -234,7 +234,7 @@ class CandidateService:
                         row[stamp] = p[stamp]
                 profiles.append(row)
         self.store.replace_all(engines, voices, profiles, cand.settings)
-        for engine in self.engines.registry.all():
+        for engine in self.engines.runtime.all():
             state = self.store.get_engine_state(engine.engine_id)
             if state is not None:
                 engine.configure(state["options"])
@@ -289,7 +289,7 @@ class CandidateService:
                 cand.engines = {}
                 for engine_id, cfg in raw_engines.items():
                     cfg = cfg or {}
-                    engine = self.engines.registry.get(str(engine_id))
+                    engine = self.engines.runtime.get(str(engine_id))
                     defaults = engine.default_options() if engine else {}
                     if not isinstance(cfg.get("options", {}), dict) or not isinstance(cfg.get("enabled", True), bool):
                         issues.append(Issue("schema_invalid", "enabled must be boolean and options a mapping",

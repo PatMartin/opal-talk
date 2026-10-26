@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import threading
-from collections import defaultdict
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
@@ -79,7 +77,7 @@ class GenerationService:
         self.store = store
         self.engines = engines
         self.settings = settings
-        self._locks: defaultdict[str, threading.Lock] = defaultdict(threading.Lock)
+        # Per-engine serialization is owned by EngineRuntimeManager (engines.runtime).
 
     # -- resolution -----------------------------------------------------------
 
@@ -100,7 +98,7 @@ class GenerationService:
         if not voice["enabled"]:
             raise Conflict(f"voice '{voice_id}' is disabled", "voice_disabled", {"voice_id": voice_id})
         engine_id = engine_override or voice["engine_id"]
-        engine = self.engines.registry.get(engine_id)
+        engine = self.engines.runtime.get(engine_id)
         if engine is None:
             raise Conflict(f"engine '{engine_id}' is not installed", "engine_not_found", {"engine_id": engine_id})
         if engine_id != voice["engine_id"]:
@@ -236,12 +234,11 @@ class GenerationService:
         Engine exceptions are translated to API errors so callers can report failures that
         occur before the first block as normal JSON errors.
         """
-        lock = self._locks[plan.engine.engine_id]
         ref = plan.voice["engine_voice_ref"]
         for text in plan.chunks:
             try:
-                with lock:
-                    pieces = list(plan.engine.synthesize(ref, text, plan.speed, plan.options))
+                with self.engines.runtime.using(plan.engine.engine_id) as engine:
+                    pieces = list(engine.synthesize(ref, text, plan.speed, plan.options))
             except Exception as exc:  # noqa: BLE001
                 raise translate_engine_error(exc) from exc
             for piece in pieces:

@@ -16,6 +16,7 @@ from opal_talk.service.generation import GenerationService
 from opal_talk.service.settings import SettingsService
 from opal_talk.tts.base import TtsEngine
 from opal_talk.tts.registry import EngineRegistry, default_engines
+from opal_talk.tts.runtime import EngineRuntimeManager
 
 log = logging.getLogger(__name__)
 
@@ -24,6 +25,7 @@ log = logging.getLogger(__name__)
 class Services:
     config: ServiceConfig
     store: Store
+    runtime: EngineRuntimeManager
     engines: EngineService
     voices: VoiceService
     profiles: ProfileService
@@ -33,7 +35,7 @@ class Services:
 
     def health(self) -> dict[str, Any]:
         engines = []
-        for engine in self.engines.registry.all():
+        for engine in self.runtime.all():
             available, message = engine.availability()
             enabled = self.engines.state(engine.engine_id)["enabled"]
             engines.append({"engine_id": engine.engine_id, "enabled": enabled, "available": available,
@@ -61,14 +63,15 @@ class Services:
 def build_services(config: ServiceConfig, engines: list[TtsEngine] | None = None) -> Services:
     store = Store(config.db_path)
     fresh = store.created
-    registry = EngineRegistry(engines if engines is not None else default_engines())
-    engine_svc = EngineService(store, registry)
+    runtime = EngineRuntimeManager(EngineRegistry(engines if engines is not None else default_engines()))
+    engine_svc = EngineService(store, runtime)
     engine_svc.bootstrap(config.engines)
     voice_svc = VoiceService(store, engine_svc)
     settings_svc = SettingsService(store)
     services = Services(
         config=config,
         store=store,
+        runtime=runtime,
         engines=engine_svc,
         voices=voice_svc,
         profiles=ProfileService(store, engine_svc, voice_svc),
