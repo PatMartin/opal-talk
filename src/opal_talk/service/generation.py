@@ -254,8 +254,25 @@ class GenerationService:
             self.engines.runtime.release(runtime)
 
     def render(self, plan: GenerationPlan) -> tuple[bytes, str]:
-        """Return the completed audio body and its media type."""
-        pcm = b"".join(self.pcm_stream(plan))
+        """Return the completed audio body and its media type.
+
+        Non-streaming responses must buffer the whole output; the accumulated PCM is
+        bounded by the `max_audio_bytes` setting — exceeding it aborts early (the
+        abandoned stream releases its runtime reference and inference permit) and
+        returns 413 instead of growing memory unboundedly. `pcm_stream`, used by
+        /generate/stream, emits each block incrementally and has no such bound.
+        """
+        limit = int(self.settings.effective("max_audio_bytes"))
+        total, blocks = 0, []
+        for block in self.pcm_stream(plan):
+            total += len(block)
+            if total > limit:
+                raise PayloadTooLarge(
+                    f"generated audio exceeds the {limit}-byte limit",
+                    details={"limit_bytes": limit, "produced_bytes": total},
+                )
+            blocks.append(block)
+        pcm = b"".join(blocks)
         if plan.output_format == "wav":
             return wav_bytes(pcm, plan.sample_rate), "audio/wav"
         return pcm, "application/octet-stream"

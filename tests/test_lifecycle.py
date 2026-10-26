@@ -355,3 +355,34 @@ def test_abandoned_stream_releases_bind_and_permit(config):
         assert_permits_free(services.engines.runtime, "fake")
     finally:
         services.close()
+
+
+# -- bounded non-streaming buffers -----------------------------------------------
+
+
+def test_render_rejects_audio_beyond_max_buffer(client):
+    """Non-streaming renders accumulate under `max_audio_bytes` -> 413 before runaway."""
+    make_voice(client, "v1")
+    client.skip_contract = True
+    client.put("/api/v1/settings/max_audio_bytes", json={"value": str(1 << 16)})
+    text = "word " * 5000
+    resp = client.post("/api/v1/generate", json={"text": text, "voice_id": "v1"})
+    assert resp.status_code == 413
+    assert resp.json()["error"]["code"] == "payload_too_large"
+    # Streaming is incremental, not bounded by the buffered-output cap.
+    client.skip_contract = False
+    with client.stream("POST", "/api/v1/generate/stream",
+                       json={"text": "ok", "voice_id": "v1", "engine_options": {"delay": 0.01}}) as r:
+        assert r.status_code == 200
+    # The aborted render released everything: the next request works normally.
+    assert client.post("/api/v1/generate", json={"text": "ok", "voice_id": "v1"}).status_code == 200
+
+
+def test_to_pcm16_byte_identical_output():
+    import numpy as np
+
+    from opal_talk.tts.audio import to_pcm16
+
+    samples = np.linspace(-1.2, 1.2, 4001, dtype=np.float32)
+    expected = (np.clip(samples.astype(np.float32) * 0.5, -1.0, 1.0) * 32767.0).round().astype("<i2").tobytes()
+    assert to_pcm16(samples, 0.5) == expected

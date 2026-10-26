@@ -35,6 +35,7 @@ def _choice(*choices: str) -> Callable[[str], str]:
 # key -> (parser, default). Defaults apply when the key is not stored.
 KNOWN_SETTINGS: dict[str, tuple[Callable[[str], Any], Any]] = {
     "max_text_chars": (_number(int, 1, 1_000_000), 20_000),
+    "max_audio_bytes": (_number(int, 1 << 16, 1 << 29), 128 << 20),
     "chunk_max_chars": (_number(int, 50, 5_000), 400),
     "default_speed": (_number(float, 0.25, 4.0), 1.0),
     "default_volume": (_number(float, 0.0, 2.0), 1.0),

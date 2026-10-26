@@ -22,8 +22,9 @@ def resample(samples: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray:
 
 def to_pcm16(samples: np.ndarray, volume: float = 1.0) -> bytes:
     """Apply linear gain to float samples in [-1, 1], clip, and encode as signed 16-bit little-endian."""
-    scaled = np.clip(np.asarray(samples, dtype=np.float32) * volume, -1.0, 1.0)
-    return (scaled * 32767.0).round().astype("<i2").tobytes()
+    scaled = np.asarray(samples, dtype=np.float32) * volume * 32767.0
+    np.clip(scaled, -32767.0, 32767.0, out=scaled)  # fewer temporaries, same output
+    return scaled.round().astype("<i2").tobytes()
 
 
 def wav_bytes(pcm: bytes, sample_rate: int) -> bytes:
