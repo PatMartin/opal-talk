@@ -241,14 +241,15 @@ class GenerationService:
         try:
             for text in plan.chunks:
                 try:
+                    # Hold the inference permit for the whole iterator, but *consume*
+                    # chunks incrementally instead of materializing the list.
                     with runtime:
-                        pieces = list(runtime.engine.synthesize(ref, text, plan.speed, plan.options))
+                        for piece in runtime.engine.synthesize(ref, text, plan.speed, plan.options):
+                            samples = resample(piece.samples, piece.sample_rate, plan.sample_rate)
+                            if samples.size:
+                                yield to_pcm16(samples, plan.volume)
                 except Exception as exc:  # noqa: BLE001
                     raise translate_engine_error(exc) from exc
-                for piece in pieces:
-                    samples = resample(piece.samples, piece.sample_rate, plan.sample_rate)
-                    if samples.size:
-                        yield to_pcm16(samples, plan.volume)
         finally:
             self.engines.runtime.release(runtime)
 

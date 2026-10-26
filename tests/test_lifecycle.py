@@ -7,10 +7,11 @@ from __future__ import annotations
 import threading
 import time
 
+import numpy as np
 import pytest
 
 from conftest import FakeEngine, make_voice
-from opal_talk.tts.base import EngineUnavailableError
+from opal_talk.tts.base import AudioChunk, EngineUnavailableError
 from opal_talk.tts.cache import ModelCache
 from opal_talk.tts.registry import EngineRegistry
 from opal_talk.tts.runtime import EngineRuntimeManager
@@ -285,3 +286,72 @@ def test_no_permit_leaks_after_mixed_failures():
     manager.release(rt)
     assert_permits_free(manager, "fake")
     assert_permits_free(manager, "alt")
+
+
+# -- incremental streaming --------------------------------------------------------
+
+
+class IncrementalEngine(FakeEngine):
+    """Yields one chunk, blocks on a gate, then yields the final chunk."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.first_yielded = threading.Event()
+        self.release_rest = threading.Event()
+
+    def synthesize(self, ref, text, speed, options):
+        self.first_yielded.set()
+        yield AudioChunk(np.zeros(200, dtype=np.float32), 22050)
+        self.release_rest.wait(10)
+        yield AudioChunk(np.ones(200, dtype=np.float32), 22050)
+
+
+def _services_with_engine(config, engine):
+    from opal_talk.persistence.store import now_iso
+    from opal_talk.service.container import build_services
+
+    services = build_services(config, engines=[engine])
+    stamp = now_iso()
+    services.store.insert_voice(
+        {
+            "voice_id": "v1", "name": "v1", "description": None, "engine_id": engine.engine_id,
+            "engine_voice_ref": "tone-a", "language": "en-US", "enabled": True,
+            "native_sample_rate": 22050, "engine_options": {}, "metadata": {},
+            "created_at": stamp, "updated_at": stamp,
+        }
+    )
+    return services
+
+
+def _plan(services, engine_id="fake"):
+    from opal_talk.schemas import GenerateRequest
+
+    return services.generation.plan(GenerateRequest(text="hello", voice_id="v1"))
+
+
+def test_pcm_stream_yields_first_block_before_engine_finishes(config):
+    """Incremental consumption: no list() buffering delays the first block."""
+    engine = IncrementalEngine("fake")
+    services = _services_with_engine(config, engine)
+    try:
+        stream = services.generation.pcm_stream(_plan(services))
+        first = next(stream)
+        assert first and engine.first_yielded.is_set()
+        assert not engine.release_rest.is_set()  # block arrived while engine still producing
+        engine.release_rest.set()
+        assert list(stream)  # the final block follows once produced
+    finally:
+        services.close()
+
+
+def test_abandoned_stream_releases_bind_and_permit(config):
+    """Closing a partially consumed stream returns the runtime reference + permit."""
+    engine = IncrementalEngine("fake")
+    services = _services_with_engine(config, engine)
+    try:
+        stream = services.generation.pcm_stream(_plan(services))
+        next(stream)
+        stream.close()  # GeneratorExit through the `with` + finally releases everything
+        assert_permits_free(services.engines.runtime, "fake")
+    finally:
+        services.close()
