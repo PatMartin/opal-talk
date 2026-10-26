@@ -5,8 +5,6 @@ from __future__ import annotations
 import importlib.metadata
 import importlib.util
 import json
-import threading
-from collections import OrderedDict
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any
@@ -24,6 +22,7 @@ from opal_talk.tts.base import (
     VoiceDescription,
     VoiceResolutionError,
 )
+from opal_talk.tts.cache import ModelCache
 
 
 def _range(lo: float, hi: float):
@@ -48,16 +47,15 @@ class PiperEngine(TtsEngine):
 
     def __init__(self) -> None:
         super().__init__()
-        self._cache: OrderedDict[tuple[str, str, bool], Any] = OrderedDict()
-        self._cache_lock = threading.Lock()
+        self._models = ModelCache(capacity=lambda: int(self._options.get("cache_size", 4)))
 
     def default_options(self) -> dict[str, Any]:
         return {"use_cuda": False, "voices_dir": None, "cache_size": 4}
 
     def configure(self, options: Mapping[str, Any]) -> None:
         super().configure(options)
-        with self._cache_lock:
-            self._cache.clear()
+        # Stale-mark cached voices; entries pinned by in-flight synthesis drain safely.
+        self._models.clear()
 
     def availability(self) -> tuple[bool, str | None]:
         if importlib.util.find_spec("piper") is None:
@@ -134,32 +132,34 @@ class PiperEngine(TtsEngine):
     # -- synthesis --------------------------------------------------------
 
     def _load(self, model: Path, config: Path):
+        """Return a held CacheEntry for the PiperVoice; caller must release() it."""
         if importlib.util.find_spec("piper") is None:
             raise EngineUnavailableError("piper-tts runtime is not installed")
         from piper import PiperVoice
 
         use_cuda = bool(self._options.get("use_cuda", False))
         key = (str(model), str(config), use_cuda)
-        with self._cache_lock:
-            voice = self._cache.get(key)
-            if voice is not None:
-                self._cache.move_to_end(key)
-                return voice
-        try:
-            voice = PiperVoice.load(model, config_path=config, use_cuda=use_cuda)
-        except Exception as exc:  # noqa: BLE001 - surface any runtime load failure
-            raise SynthesisError(f"failed to load Piper voice '{model}': {exc}") from exc
-        with self._cache_lock:
-            self._cache[key] = voice
-            while len(self._cache) > int(self._options.get("cache_size", 4)):
-                self._cache.popitem(last=False)
-        return voice
+
+        def load():
+            try:
+                return PiperVoice.load(model, config_path=config, use_cuda=use_cuda)
+            except Exception as exc:  # noqa: BLE001 - surface any runtime load failure
+                raise SynthesisError(f"failed to load Piper voice '{model}': {exc}") from exc
+
+        return self._models.acquire(key, load)
 
     def synthesize(self, ref: str, text: str, speed: float, options: Mapping[str, Any]) -> Iterator[AudioChunk]:
+        model, config = self._resolve_paths(ref, options)
+        entry = self._load(model, config)
+        try:
+            voice = entry.value
+            yield from self._synthesize(voice, text, speed, options)
+        finally:
+            self._models.release(entry)
+
+    def _synthesize(self, voice, text: str, speed: float, options: Mapping[str, Any]) -> Iterator[AudioChunk]:
         from piper import SynthesisConfig
 
-        model, config = self._resolve_paths(ref, options)
-        voice = self._load(model, config)
         num_speakers = int(voice.config.num_speakers or 1)
 
         speaker_id = options.get("speaker_id")
