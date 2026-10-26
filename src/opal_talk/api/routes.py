@@ -64,8 +64,8 @@ class _PcmBodyIterator:
     """Async iterator feeding the synchronous PCM generator of one stream request.
 
     `close()` — serialized with in-flight reads — is the single release path for the
-    generator's runtime reference and inference permit. `__del__` schedules it as the
-    last resort for a response that is abandoned without unwinding its call path.
+    generator's runtime reference and inference permit. `_PcmStreamResponse` calls
+    it from `__call__`'s finally, so every unwind path reaches it deterministically.
     """
 
     def __init__(self, blocks, ctx: str, on_close=None):
@@ -113,6 +113,13 @@ class _PcmBodyIterator:
             return next(self._blocks, None)
 
     def close(self) -> None:
+        """Release the stream exactly once.
+
+        The lock serializes against an in-flight `next()`: `blocks.close()` while a
+        worker is executing would raise `ValueError: generator already executing`,
+        so close() waits out the running engine call — bounded by that call's own
+        duration, never deadlocked by this cleanup itself.
+        """
         with self._lock:
             if self._closed:
                 return
@@ -130,14 +137,6 @@ class _PcmBodyIterator:
                 log.exception("failed to release the bound generation (%s)", self._ctx)
         if not self._completed and not self._failed:
             log.info("audio stream closed before completion (%s)", self._ctx)
-
-    def __del__(self):
-        # Off the caller's thread: teardown may have to wait out an in-flight engine call.
-        try:
-            if not self._closed:
-                threading.Thread(target=self.close, name="opal-stream-close", daemon=True).start()
-        except Exception:  # noqa: BLE001
-            pass
 
 
 class _PcmStreamResponse(StreamingResponse):

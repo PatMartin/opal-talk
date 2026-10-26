@@ -237,3 +237,30 @@ def test_stream_at_capacity_returns_engine_unavailable(live_server, client, voic
             assert rec.waiters == 0
     finally:
         gate.set()
+
+
+def test_close_during_long_engine_call_releases_after_it_finishes(client, voices, engines, app):
+    """Abandoning a stream while the engine is mid-call: cleanup waits out the
+    call (synchronous generators cannot be closed while executing), then
+    releases the runtime reference and inference permit."""
+    engine = engines[0]
+    entered, gate = threading.Event(), threading.Event()
+    synthesize = engine.synthesize
+
+    def gated(ref, text, speed, options):
+        yield from synthesize(ref, text, speed, options)
+        entered.set()
+        gate.wait(30)
+        yield from synthesize(ref, text, speed, options)
+
+    engine.synthesize = gated
+    rec = app.state.services.runtime._records["fake"]
+    body = {"text": SENTENCES, "voice_id": "v1"}
+    # The engine call finishes shortly after the response close begins.
+    threading.Timer(0.3, gate.set).start()
+    with client.stream("POST", "/api/v1/generate/stream", json=body) as resp:
+        assert resp.status_code == 200
+        assert next(resp.iter_raw())
+        assert entered.wait(5)  # the second engine call is in flight, blocked
+    assert _wait_until(lambda: rec.refs == 0)
+    assert _wait_until(lambda: rec.waiters == 0)
