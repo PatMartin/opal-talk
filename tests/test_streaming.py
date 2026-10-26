@@ -180,8 +180,8 @@ def test_close_tolerates_engine_teardown_failure(client, voices, engines, app, m
     def flaky(ref, text, speed, options):
         try:
             yield from synthesize(ref, text, speed, options)
-        except GeneratorExit:
-            raise RuntimeError("engine teardown failed")
+        except GeneratorExit as exc:
+            raise RuntimeError("engine teardown failed") from exc
 
     engine.synthesize = flaky
     rec = app.state.services.runtime._records["fake"]
